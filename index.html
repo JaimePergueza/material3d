@@ -192,128 +192,15 @@
     renderer="antialias: true; colorManagement: true; physicallyCorrectLights: true; precision: medium; alpha: true;"
     embedded
   >
-    <!-- 
-      ============================================================
-      PRE-CARGA DE MODELOS
-      ============================================================
-      Aquí defines todos tus modelos GLB/GLTF
-      
-      PARA AGREGAR MÁS MODELOS:
-      1. Añade una línea <a-asset-item> con un id único
-      2. Ejemplo: <a-asset-item id="modelo-mapa" src="./modelos/mapa.glb"></a-asset-item>
-    -->
-    <a-assets>
-      <a-asset-item id="modelo-portada" src="./modelos/portada.glb"></a-asset-item>
-      <a-asset-item id="modelo-proceso" src="./modelos/proceso.glb"></a-asset-item>
-      <!-- AGREGA MÁS MODELOS AQUÍ -->
-      <!-- <a-asset-item id="modelo-diagrama" src="./modelos/diagrama.glb"></a-asset-item> -->
-      <!-- <a-asset-item id="modelo-resultado" src="./modelos/resultado.glb"></a-asset-item> -->
-    </a-assets>
-
-    <!-- 
-      ============================================================
-      ANCHORS - CADA TARGET INDEX CORRESPONDE A UNA IMAGEN
-      ============================================================
-      El targetIndex debe coincidir con el ORDEN en que subiste
-      las imágenes al compilador de MindAR:
-      - Primera imagen subida = targetIndex: 0
-      - Segunda imagen subida = targetIndex: 1
-      - Tercera imagen subida = targetIndex: 2
-      - etc.
-      
-      PARA AGREGAR MÁS MARCADORES:
-      1. Copia todo el bloque <a-entity id="anchor-X">
-      2. Cambia el ID (anchor-2, anchor-3, etc.)
-      3. Cambia el targetIndex al número correspondiente
-      4. Cambia el src del modelo (#modelo-diagrama, etc.)
-      5. Cambia el texto del label
-    -->
-    
-    <!-- TARGET 0: Primera imagen (ej: portada.jpg) -->
-    <a-entity id="anchor-0" mindar-image-target="targetIndex: 0">
-      <a-gltf-model 
-        id="model-0" 
-        src="#modelo-portada" 
-        position="0 0 0" 
-        rotation="0 0 0" 
-        scale="0.7 0.7 0.7"
-        animation-mixer
-      ></a-gltf-model>
-      <a-text 
-        value="Frutas y Verduras" 
-        position="0 0.8 0" 
-        align="center" 
-        color="#FFFFFF" 
-        scale="0.8 0.8 0.8"
-      ></a-text>
-    </a-entity>
-
-    <!-- TARGET 1: Segunda imagen (ej: proceso.jpg) -->
-    <a-entity id="anchor-1" mindar-image-target="targetIndex: 1">
-      <a-gltf-model 
-        id="model-1" 
-        src="#modelo-proceso" 
-        position="0 0 0" 
-        rotation="0 0 0" 
-        scale="0.7 0.7 0.7"
-        animation-mixer
-      ></a-gltf-model>
-      <a-text 
-        value="Venta de productos" 
-        position="0 0.8 0" 
-        align="center" 
-        color="#FFFFFF" 
-        scale="0.8 0.8 0.8"
-      ></a-text>
-    </a-entity>
-
-    <!-- 
-      PARA AGREGAR TARGET 2 (tercera imagen):
-      Descomenta y edita esto:
-    -->
     <!--
-    <a-entity id="anchor-2" mindar-image-target="targetIndex: 2">
-      <a-gltf-model 
-        id="model-2" 
-        src="#modelo-diagrama" 
-        position="0 0 0" 
-        rotation="0 0 0" 
-        scale="0.7 0.7 0.7"
-        animation-mixer
-      ></a-gltf-model>
-      <a-text 
-        value="Diagrama" 
-        position="0 0.8 0" 
-        align="center" 
-        color="#FFFFFF" 
-        scale="0.8 0.8 0.8"
-      ></a-text>
-    </a-entity>
+      ============================================================
+      CONTENIDO AR DINAMICO
+      ============================================================
+      Este bloque se llena automaticamente desde ar_items.json.
+      Usa la app local de configuracion para agregar pares imagen <-> modelo.
     -->
-
-    <!-- 
-      PARA AGREGAR TARGET 3 (cuarta imagen):
-      Descomenta y edita esto:
-    -->
-    <!--
-    <a-entity id="anchor-3" mindar-image-target="targetIndex: 3">
-      <a-gltf-model 
-        id="model-3" 
-        src="#modelo-resultado" 
-        position="0 0 0" 
-        rotation="0 0 0" 
-        scale="0.7 0.7 0.7"
-        animation-mixer
-      ></a-gltf-model>
-      <a-text 
-        value="Resultados" 
-        position="0 0.8 0" 
-        align="center" 
-        color="#FFFFFF" 
-        scale="0.8 0.8 0.8"
-      ></a-text>
-    </a-entity>
-    -->
+    <a-assets id="dynamic-assets"></a-assets>
+    <a-entity id="dynamic-anchors"></a-entity>
 
     <!-- Iluminación -->
     <a-entity light="type: ambient; intensity: 0.8"></a-entity>
@@ -338,6 +225,8 @@
   </div>
 
   <script>
+    let AR_ITEMS = [];
+
     (function(){
       let arSystem = null;
       let sceneEl = null;
@@ -345,9 +234,87 @@
       let threeRenderer = null;
       let trackingActive = false;
 
+      async function loadARItems() {
+        try {
+          const response = await fetch(`./ar_items.json?v=${Date.now()}`);
+          if (!response.ok) {
+            throw new Error(`HTTP ${response.status}`);
+          }
+
+          const data = await response.json();
+          if (!Array.isArray(data)) {
+            throw new Error('ar_items.json debe contener un arreglo.');
+          }
+
+          AR_ITEMS = data;
+          console.log(`Configuracion AR cargada: ${AR_ITEMS.length} item(s).`);
+        } catch (error) {
+          console.error('No se pudo cargar ar_items.json:', error);
+          AR_ITEMS = [];
+        }
+      }
+
+      function buildDynamicARContent() {
+        const assetsEl = document.getElementById('dynamic-assets');
+        const anchorsRoot = document.getElementById('dynamic-anchors');
+
+        if (!assetsEl || !anchorsRoot) {
+          console.error('No se encontro contenedor dinamico para assets/anchors.');
+          return;
+        }
+
+        assetsEl.innerHTML = '';
+        anchorsRoot.innerHTML = '';
+
+        const normalizedItems = AR_ITEMS
+          .filter(item => Number.isInteger(item.targetIndex) && item.modelo)
+          .sort((a, b) => a.targetIndex - b.targetIndex);
+
+        normalizedItems.forEach((item) => {
+          const assetId = `modelo-target-${item.targetIndex}`;
+
+          const assetItem = document.createElement('a-asset-item');
+          assetItem.setAttribute('id', assetId);
+          assetItem.setAttribute('src', item.modelo);
+          assetsEl.appendChild(assetItem);
+
+          const anchor = document.createElement('a-entity');
+          anchor.setAttribute('id', `anchor-${item.targetIndex}`);
+          anchor.setAttribute('mindar-image-target', `targetIndex: ${item.targetIndex}`);
+          anchor.setAttribute('data-image-ref', item.imagen || '');
+
+          const model = document.createElement('a-gltf-model');
+          model.setAttribute('id', `model-${item.targetIndex}`);
+          model.setAttribute('src', `#${assetId}`);
+          model.setAttribute('position', '0 0 0');
+          model.setAttribute('rotation', '0 0 0');
+          model.setAttribute('scale', item.escala || '0.7 0.7 0.7');
+          model.setAttribute('animation-mixer', '');
+          anchor.appendChild(model);
+
+          if (item.titulo) {
+            const text = document.createElement('a-text');
+            text.setAttribute('value', item.titulo);
+            text.setAttribute('position', '0 0.8 0');
+            text.setAttribute('align', 'center');
+            text.setAttribute('color', '#FFFFFF');
+            text.setAttribute('scale', '0.8 0.8 0.8');
+            anchor.appendChild(text);
+          }
+
+          anchorsRoot.appendChild(anchor);
+        });
+
+        console.log(`AR_ITEMS cargados: ${normalizedItems.length}`);
+      }
+
       // Inicializar AR
       async function initAR() {
         sceneEl = document.getElementById('scene');
+
+        await loadARItems();
+
+        buildDynamicARContent();
         
         sceneEl.addEventListener('loaded', async () => {
           console.log('✅ Escena cargada');
@@ -369,21 +336,19 @@
             }
 
             // Suscribirse a eventos de tracking por target
-            const anchors = [
-              document.getElementById('anchor-0'),
-              document.getElementById('anchor-1')
-            ].filter(Boolean);
+            const anchors = Array.from(document.querySelectorAll('[mindar-image-target]'));
 
-            anchors.forEach((anchor, idx) => {
+            anchors.forEach((anchor) => {
+              const targetLabel = anchor.getAttribute('id') || 'target';
               anchor.addEventListener('targetFound', () => {
                 trackingActive = true;
-                console.log(`🎯 targetFound -> targetIndex: ${idx}`);
+                console.log(`🎯 targetFound -> ${targetLabel}`);
                 const scanOverlay = document.getElementById('scan-overlay');
                 if (scanOverlay) scanOverlay.classList.add('hidden');
               });
               anchor.addEventListener('targetLost', () => {
                 // Si ninguno está activo, muestra overlay
-                console.log(`⭕ targetLost -> targetIndex: ${idx}`);
+                console.log(`⭕ targetLost -> ${targetLabel}`);
                 setTimeout(() => {
                   // Verificar si sigue sin tracking tras un breve lapso
                   if (!document.querySelector('[mindar-image-target].found')) {
