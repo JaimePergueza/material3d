@@ -294,13 +294,6 @@
           .sort((a, b) => a.targetIndex - b.targetIndex);
 
         normalizedItems.forEach((item) => {
-          const assetId = `modelo-target-${item.targetIndex}`;
-
-          const assetItem = document.createElement('a-asset-item');
-          assetItem.setAttribute('id', assetId);
-          assetItem.setAttribute('src', item.modelo);
-          assetsEl.appendChild(assetItem);
-
           const anchor = document.createElement('a-entity');
           anchor.setAttribute('id', `anchor-${item.targetIndex}`);
           anchor.setAttribute('mindar-image-target', `targetIndex: ${item.targetIndex}`);
@@ -308,7 +301,7 @@
 
           const model = document.createElement('a-gltf-model');
           model.setAttribute('id', `model-${item.targetIndex}`);
-          model.setAttribute('src', `#${assetId}`);
+          model.setAttribute('src', item.modelo);
           model.setAttribute('position', '0 0 0');
           model.setAttribute('rotation', '0 0 0');
           model.setAttribute('scale', item.escala || '0.7 0.7 0.7');
@@ -335,18 +328,26 @@
       async function initAR() {
         sceneEl = document.getElementById('scene');
 
-        await loadARItems();
+        const waitSceneLoaded = sceneEl.hasLoaded
+          ? Promise.resolve()
+          : new Promise((resolve) => {
+              sceneEl.addEventListener('loaded', resolve, { once: true });
+            });
 
+        await loadARItems();
         buildDynamicARContent();
-        
-        sceneEl.addEventListener('loaded', async () => {
+
+        try {
+          await waitSceneLoaded;
           console.log('✅ Escena cargada');
-          
+
           arSystem = sceneEl.systems['mindar-image-system'];
-          
-          try {
-            await arSystem.start();
-            console.log('✅ MindAR iniciado - Apunta a tus imágenes');
+          if (!arSystem) {
+            throw new Error('No se encontro mindar-image-system en la escena.');
+          }
+
+          await arSystem.start();
+          console.log('✅ MindAR iniciado - Apunta a tus imágenes');
             
             // Obtener renderer de Three.js de A-Frame para controlar el clear color/alpha
             threeRenderer = sceneEl.renderer;
@@ -390,12 +391,11 @@
             
             // Aplicar modo inicial
             setMode(currentMode);
-          } catch (error) {
-            console.error('❌ Error al iniciar MindAR:', error);
-            document.getElementById('loading-overlay').innerHTML = 
-              '<div>❌ Error al iniciar AR</div><div style="font-size: 12px; margin-top: 10px;">Verifica que targets.mind exista en ./marcadores/</div>';
-          }
-        });
+        } catch (error) {
+          console.error('❌ Error al iniciar MindAR:', error);
+          document.getElementById('loading-overlay').innerHTML =
+            '<div>❌ Error al iniciar AR</div><div style="font-size: 12px; margin-top: 10px;">Verifica camara, permisos y que exista ./marcadores/targets.mind</div>';
+        }
       }
 
       // Obtener elementos multimedia
