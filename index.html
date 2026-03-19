@@ -225,7 +225,25 @@
   </div>
 
   <script>
-    let AR_ITEMS = [];
+    // Datos por defecto (fallback para Vercel/offline)
+    const AR_ITEMS_DEFAULT = [
+      {
+        targetIndex: 0,
+        imagen: './imagenes/portada.jpg',
+        modelo: './modelos/portada.glb',
+        titulo: 'Frutas y Verduras',
+        escala: '0.7 0.7 0.7'
+      },
+      {
+        targetIndex: 1,
+        imagen: './imagenes/proceso.jpg',
+        modelo: './modelos/proceso.glb',
+        titulo: 'Venta de productos',
+        escala: '0.7 0.7 0.7'
+      }
+    ];
+
+    let AR_ITEMS = AR_ITEMS_DEFAULT.slice();
 
     (function(){
       let arSystem = null;
@@ -246,11 +264,16 @@
             throw new Error('ar_items.json debe contener un arreglo.');
           }
 
-          AR_ITEMS = data;
-          console.log(`Configuracion AR cargada: ${AR_ITEMS.length} item(s).`);
+          if (data.length > 0) {
+            AR_ITEMS = data;
+            console.log(`Configuracion AR cargada desde archivo: ${AR_ITEMS.length} item(s).`);
+          } else {
+            console.warn('ar_items.json está vacío, usando datos por defecto.');
+            AR_ITEMS = AR_ITEMS_DEFAULT.slice();
+          }
         } catch (error) {
-          console.error('No se pudo cargar ar_items.json:', error);
-          AR_ITEMS = [];
+          console.warn('No se pudo cargar ar_items.json, usando datos por defecto:', error.message);
+          AR_ITEMS = AR_ITEMS_DEFAULT.slice();
         }
       }
 

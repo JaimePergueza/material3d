@@ -1,0 +1,43 @@
+# Entorno virtual
+.venv/
+venv/
+env/
+
+# Carpeta de utilidades (qodo, etc)
+.qodo/
+
+# Archivos del sistema
+.DS_Store
+Thumbs.db
+
+# Caché de Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Streamlit cache
+.streamlit/
