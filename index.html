@@ -229,14 +229,14 @@
     const AR_ITEMS_DEFAULT = [
       {
         targetIndex: 0,
-        imagen: './imagenes/portada.jpg',
+        imagen: './imagenes/portada0.png',
         modelo: './modelos/portada.glb',
         titulo: 'Frutas y Verduras',
         escala: '0.7 0.7 0.7'
       },
       {
         targetIndex: 1,
-        imagen: './imagenes/proceso.jpg',
+        imagen: './imagenes/procesodealimentos1.png',
         modelo: './modelos/proceso.glb',
         titulo: 'Venta de productos',
         escala: '0.7 0.7 0.7'
@@ -301,11 +301,36 @@
 
           const model = document.createElement('a-gltf-model');
           model.setAttribute('id', `model-${item.targetIndex}`);
-          model.setAttribute('src', item.modelo);
           model.setAttribute('position', '0 0 0');
           model.setAttribute('rotation', '0 0 0');
           model.setAttribute('scale', item.escala || '0.7 0.7 0.7');
+          model.setAttribute('visible', 'false');
           model.setAttribute('animation-mixer', '');
+          model.dataset.modelSrc = item.modelo;
+          model.dataset.modelFallback = item.modeloFallback || '';
+          model.dataset.modelRequested = 'false';
+          model.dataset.modelReady = 'false';
+
+          model.addEventListener('model-loaded', () => {
+            model.dataset.modelReady = 'true';
+            model.setAttribute('visible', 'true');
+          });
+
+          model.addEventListener('model-error', () => {
+            const fallback = model.dataset.modelFallback;
+            const currentSrc = model.getAttribute('src') || '';
+
+            if (fallback && currentSrc !== fallback) {
+              console.warn(`Modelo principal fallo para target ${item.targetIndex}. Usando fallback.`);
+              model.dataset.modelRequested = 'true';
+              model.dataset.modelReady = 'false';
+              model.setAttribute('src', fallback);
+              return;
+            }
+
+            console.error(`No se pudo cargar modelo para target ${item.targetIndex}: ${currentSrc || model.dataset.modelSrc}`);
+          });
+
           anchor.appendChild(model);
 
           if (item.titulo) {
@@ -346,7 +371,12 @@
             throw new Error('No se encontro mindar-image-system en la escena.');
           }
 
-          await arSystem.start();
+          await Promise.race([
+            arSystem.start(),
+            new Promise((_, reject) => {
+              setTimeout(() => reject(new Error('Timeout iniciando MindAR.')), 15000);
+            })
+          ]);
           console.log('✅ MindAR iniciado - Apunta a tus imágenes');
             
             // Obtener renderer de Three.js de A-Frame para controlar el clear color/alpha
@@ -367,12 +397,31 @@
               anchor.addEventListener('targetFound', () => {
                 trackingActive = true;
                 console.log(`🎯 targetFound -> ${targetLabel}`);
+
+                const modelEl = anchor.querySelector('a-gltf-model');
+                if (modelEl) {
+                  if (modelEl.dataset.modelRequested !== 'true') {
+                    modelEl.dataset.modelRequested = 'true';
+                    modelEl.setAttribute('src', modelEl.dataset.modelSrc || '');
+                  }
+
+                  if (modelEl.dataset.modelReady === 'true') {
+                    modelEl.setAttribute('visible', 'true');
+                  }
+                }
+
                 const scanOverlay = document.getElementById('scan-overlay');
                 if (scanOverlay) scanOverlay.classList.add('hidden');
               });
               anchor.addEventListener('targetLost', () => {
                 // Si ninguno está activo, muestra overlay
                 console.log(`⭕ targetLost -> ${targetLabel}`);
+
+                const modelEl = anchor.querySelector('a-gltf-model');
+                if (modelEl) {
+                  modelEl.setAttribute('visible', 'false');
+                }
+
                 setTimeout(() => {
                   // Verificar si sigue sin tracking tras un breve lapso
                   if (!document.querySelector('[mindar-image-target].found')) {

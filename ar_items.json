@@ -1,14 +1,14 @@
 [
   {
     "targetIndex": 0,
-    "imagen": "./imagenes/portada.jpg",
+    "imagen": "./imagenes/portada0.png",
     "modelo": "./modelos/portada.glb",
     "titulo": "Frutas y Verduras",
     "escala": "0.7 0.7 0.7"
   },
   {
     "targetIndex": 1,
-    "imagen": "./imagenes/proceso.jpg",
+    "imagen": "./imagenes/procesodealimentos1.png",
     "modelo": "./modelos/proceso.glb",
     "titulo": "Venta de productos",
     "escala": "0.7 0.7 0.7"
@@ -17,6 +17,7 @@
     "targetIndex": 2,
     "imagen": "./imagenes/Bosque.png",
     "modelo": "./modelos/low_poly_tree_scene_free.glb",
+    "modeloFallback": "./modelos/proceso.glb",
     "titulo": "Bosque",
     "escala": "0.7 0.7 0.7"
   }
