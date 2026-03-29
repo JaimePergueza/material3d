@@ -41,3 +41,6 @@ wheels/
 
 # Streamlit cache
 .streamlit/
+
+# Node.js
+node_modules/

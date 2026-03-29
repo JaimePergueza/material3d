@@ -1,0 +1,14 @@
+{
+  "name": "material3d-compiler",
+  "version": "1.0.0",
+  "description": "Compilador de marcadores MindAR para Material 3D",
+  "type": "module",
+  "dependencies": {
+    "@tensorflow/tfjs": "^4.22.0",
+    "@tensorflow/tfjs-backend-cpu": "^4.22.0",
+    "mind-ar": "1.2.5"
+  },
+  "overrides": {
+    "canvas": "npm:@napi-rs/canvas@^0.1.67"
+  }
+}

@@ -1,5 +1,8 @@
 import json
 import re
+import shutil
+import subprocess
+import sys
 from pathlib import Path
 
 import streamlit as st
@@ -242,6 +245,89 @@ def delete_item_and_assets(rows: list[dict], target_index: int, delete_assets: b
     return True, f"Item targetIndex {target_index} eliminado.", normalized
 
 
+# ---------------------------------------------------------------------------
+# Compilador targets.mind
+# ---------------------------------------------------------------------------
+
+COMPILE_SCRIPT = BASE_DIR / "compile_targets.js"
+TARGETS_MIND   = BASE_DIR / "marcadores" / "targets.mind"
+
+
+def _find_cmd(name: str) -> str | None:
+    """Encuentra ejecutable; en Windows prueba tambien la extension .cmd."""
+    found = shutil.which(name)
+    if found is None and sys.platform == "win32":
+        found = shutil.which(name + ".cmd")
+    return found
+
+
+def node_available() -> bool:
+    return _find_cmd("node") is not None
+
+
+def npm_deps_installed() -> bool:
+    return (BASE_DIR / "node_modules" / "mind-ar").exists()
+
+
+def run_npm_install() -> tuple[bool, str]:
+    npm = _find_cmd("npm")
+    if npm is None:
+        return False, "npm no encontrado. Verifica la instalacion de Node.js."
+    result = subprocess.run(
+        [npm, "install"],
+        capture_output=True,
+        text=True,
+        cwd=str(BASE_DIR),
+        timeout=300,
+    )
+    output = (result.stdout + result.stderr).strip()
+    return result.returncode == 0, output
+
+
+def compile_targets(items: list[dict]) -> tuple[bool, str]:
+    """Compila targets.mind con las imagenes de los items, en orden de targetIndex."""
+    if not node_available():
+        return False, "Node.js no esta disponible en el sistema."
+    if not npm_deps_installed():
+        return False, "Dependencias npm no instaladas. Usa el boton 'Instalar dependencias'."
+    if not COMPILE_SCRIPT.exists():
+        return False, f"No se encontro {COMPILE_SCRIPT.name}."
+
+    sorted_items = sorted(items, key=lambda x: int(x.get("targetIndex", 0)))
+
+    image_paths: list[str] = []
+    for item in sorted_items:
+        img_path = to_workspace_path(item.get("imagen", ""))
+        if img_path is None or not img_path.exists():
+            return False, f"Imagen no encontrada para targetIndex {item.get('targetIndex')}: {item.get('imagen')}"
+        image_paths.append(str(img_path))
+
+    if not image_paths:
+        return False, "No hay imagenes configuradas para compilar."
+
+    node = _find_cmd("node")
+    cmd  = [node, str(COMPILE_SCRIPT)] + image_paths + [str(TARGETS_MIND)]
+
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            cwd=str(BASE_DIR),
+            timeout=180,
+        )
+    except subprocess.TimeoutExpired:
+        return False, "La compilacion tardo demasiado (>3 min). Intenta con menos imagenes o mas pequenas."
+
+    output = (result.stdout + result.stderr).strip()
+    if result.returncode != 0:
+        return False, f"Error al compilar:\n{output}"
+
+    return True, f"targets.mind compilado con {len(image_paths)} imagen(es).\n{output}"
+
+
+# ---------------------------------------------------------------------------
+
 st.set_page_config(page_title="Config AR Libro", page_icon="AR", layout="wide")
 st.title("Panel AR: imagen -> modelo")
 st.caption(
@@ -380,6 +466,61 @@ if st.button("Guardar configuracion", type="primary", use_container_width=True):
         st.success(f"Configuracion guardada en {CONFIG_PATH.name} con {len(cleaned)} item(s).")
 
 st.divider()
+st.subheader("Compilar targets.mind")
+st.caption("Genera el archivo de marcadores que usa MindAR para detectar imagenes con la camara.")
+
+# Estado del entorno
+col_node, col_deps = st.columns(2)
+with col_node:
+    if node_available():
+        st.success("Node.js disponible")
+    else:
+        st.error("Node.js no encontrado")
+
+with col_deps:
+    if npm_deps_installed():
+        st.success("Dependencias instaladas")
+    else:
+        st.warning("Dependencias npm no instaladas")
+
+# Instalar dependencias (solo hace falta una vez)
+if not npm_deps_installed():
+    st.info("Primera vez: instala las dependencias de Node.js antes de compilar (puede tardar 1-2 min).")
+    if st.button("Instalar dependencias (npm install)", use_container_width=True):
+        with st.spinner("Ejecutando npm install..."):
+            ok, msg = run_npm_install()
+        if ok:
+            st.success("Dependencias instaladas correctamente.")
+            st.rerun()
+        else:
+            st.error(msg)
+
+# Mostrar orden de imagenes que se compilaran
+if st.session_state.rows:
+    sorted_for_compile = sorted(
+        [r for r in st.session_state.rows if str(r.get("targetIndex", "")).strip().isdigit()],
+        key=lambda x: int(x["targetIndex"]),
+    )
+    if sorted_for_compile:
+        st.markdown("**Imagenes que se compilaran (en este orden):**")
+        for item in sorted_for_compile:
+            img_path = to_workspace_path(item.get("imagen", ""))
+            exists   = img_path is not None and img_path.exists()
+            icon     = "✅" if exists else "❌"
+            st.markdown(f"- `[{item['targetIndex']}]` {icon} `{item.get('imagen', '')}`")
+
+# Boton de compilacion
+if node_available() and npm_deps_installed():
+    if st.button("Compilar targets.mind", type="primary", use_container_width=True):
+        with st.spinner("Compilando... esto puede tardar unos segundos."):
+            ok, msg = compile_targets(st.session_state.rows)
+        if ok:
+            st.success("targets.mind generado correctamente.")
+            st.code(msg)
+        else:
+            st.error(msg)
+
+st.divider()
 st.subheader("Como usar")
 st.markdown(
     "\n".join(
@@ -388,7 +529,7 @@ st.markdown(
             "2. El sistema guarda archivos en ./imagenes y ./modelos, y actualiza ar_items.json.",
             "3. targetIndex debe coincidir con el orden de imagenes en targets.mind.",
             "4. Recarga la pagina AR para ver los cambios.",
-            "5. Si agregas nuevas imagenes objetivo del libro, recompila marcadores/targets.mind.",
+            "5. Si agregas nuevas imagenes objetivo, usa la seccion 'Compilar targets.mind' para regenerar el archivo de marcadores.",
         ]
     )
 )
