@@ -44,11 +44,31 @@ def init_db() -> None:
                 UNIQUE (proyecto_id, target_index)
             )
         """)
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS settings (
+                key   TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            )
+        """)
         con.commit()
 
         # Primera vez: migrar proyecto existente
         if con.execute("SELECT COUNT(*) FROM proyectos").fetchone()[0] == 0:
             _migrate_existing_project(con)
+
+
+def get_setting(key: str, default: str = "") -> str:
+    with sqlite3.connect(DB_PATH) as con:
+        row = con.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
+        return row[0] if row else default
+
+
+def set_setting(key: str, value: str) -> None:
+    with sqlite3.connect(DB_PATH) as con:
+        con.execute(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, value)
+        )
+        con.commit()
 
 
 def _migrate_existing_project(con: sqlite3.Connection) -> None:
@@ -392,11 +412,25 @@ with st.sidebar:
         if proyecto_activo.get("descripcion"):
             st.caption(proyecto_activo["descripcion"])
         st.caption(f"Creado: {proyecto_activo['creado_en'][:10]}")
-        st.caption("URL en Vercel:")
+
+        # URL configurable
+        vercel_url = get_setting("vercel_url", "https://material3d-chi.vercel.app")
+        st.caption("URL del proyecto:")
         if proyecto_activo["nombre"] == "material3d":
-            st.code("material3d.vercel.app/", language=None)
+            st.code(f"{vercel_url.rstrip('/')}/", language=None)
         else:
-            st.code(f"material3d.vercel.app/?proyecto={proyecto_activo['nombre']}", language=None)
+            st.code(f"{vercel_url.rstrip('/')}/?proyecto={proyecto_activo['nombre']}", language=None)
+
+        with st.expander("Configurar URL de Vercel"):
+            nueva_url = st.text_input(
+                "URL base de Vercel",
+                value=vercel_url,
+                placeholder="https://mi-proyecto.vercel.app",
+                label_visibility="collapsed",
+            )
+            if st.button("Guardar URL", use_container_width=True):
+                set_setting("vercel_url", nueva_url.strip().rstrip("/"))
+                st.rerun()
 
 
 # ── Pestanas ───────────────────────────────────
@@ -663,7 +697,8 @@ with tab4:
 # ═══════════════════════════════════════════════
 with tab5:
     st.subheader("Como usar")
-    st.markdown("""
+    _base_url = get_setting("vercel_url", "https://material3d-chi.vercel.app")
+    st.markdown(f"""
 ### Flujo de trabajo por proyecto
 
 1. **Proyectos** — Crea un proyecto nuevo o selecciona uno existente en la barra lateral.
@@ -678,12 +713,13 @@ with tab5:
 
 | Proyecto | URL |
 |----------|-----|
-| `material3d` (raiz) | `https://material3d.vercel.app/` |
-| Cualquier otro | `https://material3d.vercel.app/?proyecto=nombre` |
+| `material3d` (raiz) | `{_base_url}/` |
+| Cualquier otro | `{_base_url}/?proyecto=nombre` |
 
 ### Importante
 
 - `targetIndex` debe coincidir con el orden de compilacion en `targets.mind`.
 - Siempre recompila despues de cambiar imagenes marcadoras.
 - Los modelos GLB pueden pesar bastante — considera optimizarlos antes de subir.
+- Para cambiar la URL de Vercel usa el desplegable "Configurar URL de Vercel" en la barra lateral.
     """)
