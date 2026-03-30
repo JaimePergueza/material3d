@@ -1,3 +1,4 @@
+import base64
 import json
 import re
 import shutil
@@ -7,6 +8,7 @@ import sys
 from pathlib import Path
 
 import streamlit as st
+import streamlit.components.v1 as components
 
 BASE_DIR      = Path(__file__).resolve().parent
 DB_PATH       = BASE_DIR / "ar_database.sqlite"
@@ -51,6 +53,14 @@ def init_db() -> None:
             )
         """)
         con.commit()
+
+        # Migrar: agregar columnas nuevas si no existen
+        for col, default in [("posicion", "0 0 0"), ("rotacion", "0 0 0")]:
+            try:
+                con.execute(f"ALTER TABLE items ADD COLUMN {col} TEXT DEFAULT '{default}'")
+                con.commit()
+            except sqlite3.OperationalError:
+                pass  # ya existe
 
         # Primera vez: migrar proyecto existente
         if con.execute("SELECT COUNT(*) FROM proyectos").fetchone()[0] == 0:
@@ -153,9 +163,11 @@ def get_items(proyecto_id: int) -> list[dict]:
                 "modelo": r["modelo"],
                 "titulo": r["titulo"],
                 "escala": r["escala"],
+                "posicion": r["posicion"] or "0 0 0",
+                "rotacion": r["rotacion"] or "0 0 0",
             }
             for r in con.execute(
-                "SELECT target_index, imagen, modelo, titulo, escala FROM items "
+                "SELECT target_index, imagen, modelo, titulo, escala, posicion, rotacion FROM items "
                 "WHERE proyecto_id = ? ORDER BY target_index",
                 (proyecto_id,)
             ).fetchall()
@@ -165,10 +177,11 @@ def get_items(proyecto_id: int) -> list[dict]:
 def save_item(proyecto_id: int, item: dict) -> None:
     with sqlite3.connect(DB_PATH) as con:
         con.execute(
-            "INSERT OR REPLACE INTO items (proyecto_id, target_index, imagen, modelo, titulo, escala) "
-            "VALUES (?,?,?,?,?,?)",
+            "INSERT OR REPLACE INTO items (proyecto_id, target_index, imagen, modelo, titulo, escala, posicion, rotacion) "
+            "VALUES (?,?,?,?,?,?,?,?)",
             (proyecto_id, int(item["targetIndex"]), item["imagen"],
-             item["modelo"], item.get("titulo", ""), item.get("escala", "0.7 0.7 0.7"))
+             item["modelo"], item.get("titulo", ""), item.get("escala", "0.7 0.7 0.7"),
+             item.get("posicion", "0 0 0"), item.get("rotacion", "0 0 0"))
         )
         con.commit()
 
@@ -214,10 +227,11 @@ def replace_all_items(proyecto_id: int, items: list[dict]) -> None:
         for row in items:
             try:
                 con.execute(
-                    "INSERT INTO items (proyecto_id, target_index, imagen, modelo, titulo, escala) "
-                    "VALUES (?,?,?,?,?,?)",
+                    "INSERT INTO items (proyecto_id, target_index, imagen, modelo, titulo, escala, posicion, rotacion) "
+                    "VALUES (?,?,?,?,?,?,?,?)",
                     (proyecto_id, int(row["targetIndex"]), row.get("imagen", ""),
-                     row.get("modelo", ""), row.get("titulo", ""), row.get("escala", "0.7 0.7 0.7"))
+                     row.get("modelo", ""), row.get("titulo", ""), row.get("escala", "0.7 0.7 0.7"),
+                     row.get("posicion", "0 0 0"), row.get("rotacion", "0 0 0"))
                 )
             except Exception:
                 pass
@@ -392,6 +406,211 @@ def compile_targets_global() -> tuple[bool, str]:
 
 
 # ──────────────────────────────────────────────
+# Previsualizador 3D
+# ──────────────────────────────────────────────
+
+def _parse_vec3(val: str, default: tuple = (0, 0, 0)) -> tuple:
+    try:
+        parts = val.strip().split()
+        return (float(parts[0]), float(parts[1]), float(parts[2]))
+    except Exception:
+        return default
+
+
+def build_3d_viewer_html(
+    model_b64: str,
+    image_b64: str | None,
+    image_ext: str,
+    sx: float, sy: float, sz: float,
+    px: float, py: float, pz: float,
+    rx: float, ry: float, rz: float,
+) -> str:
+    img_section = ""
+    if image_b64:
+        img_section = f"""
+        // Marker image as ground plane
+        const imgTex = new THREE.TextureLoader().load('data:image/{image_ext};base64,{image_b64}');
+        imgTex.colorSpace = THREE.SRGBColorSpace;
+        const planeG = new THREE.PlaneGeometry(1, 1);
+        const planeM = new THREE.MeshBasicMaterial({{ map: imgTex, transparent: true, opacity: 0.85, side: THREE.DoubleSide }});
+        const plane = new THREE.Mesh(planeG, planeM);
+        plane.rotation.x = -Math.PI / 2;
+        plane.position.y = 0.001;
+        scene.add(plane);
+        """
+
+    return f"""<!DOCTYPE html>
+<html><head><style>
+* {{ margin:0; padding:0; box-sizing:border-box; }}
+body {{ background:#1a1a2e; font-family:Arial,sans-serif; color:#e0e0e0; overflow:hidden; display:flex; height:100vh; }}
+#viewport {{ flex:1; position:relative; }}
+#panel {{ width:260px; background:#16213e; padding:16px; overflow-y:auto; border-left:1px solid #0f3460; }}
+#panel h3 {{ color:#4299e1; margin:0 0 12px; font-size:14px; }}
+.section {{ margin-bottom:16px; }}
+.section-title {{ font-size:11px; color:#8899aa; text-transform:uppercase; letter-spacing:1px; margin-bottom:8px; }}
+.control {{ display:flex; align-items:center; gap:8px; margin-bottom:6px; }}
+.control label {{ width:16px; font-size:13px; font-weight:bold; color:#66aadd; }}
+.control input[type=range] {{ flex:1; accent-color:#4299e1; }}
+.control .val {{ width:50px; text-align:right; font-size:12px; font-family:monospace; color:#aaddff; }}
+.values-box {{ background:#0f3460; border-radius:6px; padding:10px; margin-top:10px; font-family:monospace; font-size:12px; line-height:1.8; }}
+.values-box span {{ color:#4299e1; }}
+.copy-btn {{ background:#4299e1; color:#fff; border:none; border-radius:4px; padding:4px 10px; font-size:11px; cursor:pointer; margin-top:6px; }}
+.copy-btn:hover {{ background:#3182ce; }}
+#info {{ position:absolute; bottom:8px; left:8px; font-size:11px; color:#556; }}
+</style></head>
+<body>
+<div id="viewport"><div id="info">Click + arrastrar para rotar | Scroll para zoom</div></div>
+<div id="panel">
+  <h3>Propiedades</h3>
+  <div class="section">
+    <div class="section-title">Escala</div>
+    <div class="control"><label>X</label><input type="range" id="sx" min="0.01" max="5" step="0.01" value="{sx}"><span class="val" id="sx_v">{sx}</span></div>
+    <div class="control"><label>Y</label><input type="range" id="sy" min="0.01" max="5" step="0.01" value="{sy}"><span class="val" id="sy_v">{sy}</span></div>
+    <div class="control"><label>Z</label><input type="range" id="sz" min="0.01" max="5" step="0.01" value="{sz}"><span class="val" id="sz_v">{sz}</span></div>
+  </div>
+  <div class="section">
+    <div class="section-title">Posicion</div>
+    <div class="control"><label>X</label><input type="range" id="px" min="-3" max="3" step="0.01" value="{px}"><span class="val" id="px_v">{px}</span></div>
+    <div class="control"><label>Y</label><input type="range" id="py" min="-3" max="3" step="0.01" value="{py}"><span class="val" id="py_v">{py}</span></div>
+    <div class="control"><label>Z</label><input type="range" id="pz" min="-3" max="3" step="0.01" value="{pz}"><span class="val" id="pz_v">{pz}</span></div>
+  </div>
+  <div class="section">
+    <div class="section-title">Rotacion (grados)</div>
+    <div class="control"><label>X</label><input type="range" id="rx" min="-180" max="180" step="1" value="{rx}"><span class="val" id="rx_v">{rx}</span></div>
+    <div class="control"><label>Y</label><input type="range" id="ry" min="-180" max="180" step="1" value="{ry}"><span class="val" id="ry_v">{ry}</span></div>
+    <div class="control"><label>Z</label><input type="range" id="rz" min="-180" max="180" step="1" value="{rz}"><span class="val" id="rz_v">{rz}</span></div>
+  </div>
+  <div class="values-box" id="values-display">
+    <span>Escala:</span> {sx} {sy} {sz}<br>
+    <span>Posicion:</span> {px} {py} {pz}<br>
+    <span>Rotacion:</span> {rx} {ry} {rz}
+  </div>
+  <button class="copy-btn" onclick="copyValues()">Copiar valores</button>
+</div>
+
+<script type="importmap">
+{{
+  "imports": {{
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+  }}
+}}
+</script>
+<script type="module">
+import * as THREE from 'three';
+import {{ GLTFLoader }} from 'three/addons/loaders/GLTFLoader.js';
+import {{ OrbitControls }} from 'three/addons/controls/OrbitControls.js';
+
+const container = document.getElementById('viewport');
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x1a1a2e);
+
+const camera = new THREE.PerspectiveCamera(45, container.clientWidth / container.clientHeight, 0.01, 100);
+camera.position.set(1.5, 1.5, 1.5);
+
+const renderer = new THREE.WebGLRenderer({{ antialias: true }});
+renderer.setSize(container.clientWidth, container.clientHeight);
+renderer.setPixelRatio(window.devicePixelRatio);
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+container.appendChild(renderer.domElement);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.dampingFactor = 0.08;
+
+// Lights
+scene.add(new THREE.AmbientLight(0xffffff, 0.7));
+const dLight = new THREE.DirectionalLight(0xffffff, 1.0);
+dLight.position.set(3, 5, 4);
+scene.add(dLight);
+scene.add(new THREE.HemisphereLight(0x8899cc, 0x443322, 0.4));
+
+// Grid + axes
+scene.add(new THREE.GridHelper(4, 20, 0x334466, 0x222244));
+scene.add(new THREE.AxesHelper(0.5));
+
+{img_section}
+
+// Load model
+const modelB64 = document.getElementById('model-data').textContent;
+const raw = atob(modelB64);
+const arr = new Uint8Array(raw.length);
+for (let i = 0; i < raw.length; i++) arr[i] = raw.charCodeAt(i);
+
+let model = null;
+new GLTFLoader().parse(arr.buffer, '', (gltf) => {{
+  model = gltf.scene;
+  model.scale.set({sx}, {sy}, {sz});
+  model.position.set({px}, {py}, {pz});
+  model.rotation.set({rx}*Math.PI/180, {ry}*Math.PI/180, {rz}*Math.PI/180);
+  scene.add(model);
+
+  // Center camera target
+  const box = new THREE.Box3().setFromObject(model);
+  const center = box.getCenter(new THREE.Vector3());
+  controls.target.copy(center);
+
+  // Play animations
+  if (gltf.animations.length > 0) {{
+    const mixer = new THREE.AnimationMixer(model);
+    gltf.animations.forEach(clip => mixer.clipAction(clip).play());
+    window._mixer = mixer;
+    window._clock = new THREE.Clock();
+  }}
+}});
+
+// Slider binding
+const ids = ['sx','sy','sz','px','py','pz','rx','ry','rz'];
+ids.forEach(id => {{
+  const el = document.getElementById(id);
+  el.addEventListener('input', () => {{
+    const v = parseFloat(el.value);
+    document.getElementById(id+'_v').textContent = v;
+    if (!model) return;
+    if (id[0]==='s') model.scale[id[1]] = v;
+    else if (id[0]==='p') model.position[id[1]] = v;
+    else model.rotation[id[1]] = v * Math.PI / 180;
+    updateDisplay();
+  }});
+}});
+
+function updateDisplay() {{
+  const g = id => parseFloat(document.getElementById(id).value);
+  document.getElementById('values-display').innerHTML =
+    `<span>Escala:</span> ${{g('sx')}} ${{g('sy')}} ${{g('sz')}}<br>` +
+    `<span>Posicion:</span> ${{g('px')}} ${{g('py')}} ${{g('pz')}}<br>` +
+    `<span>Rotacion:</span> ${{g('rx')}} ${{g('ry')}} ${{g('rz')}}`;
+}}
+
+function animate() {{
+  requestAnimationFrame(animate);
+  controls.update();
+  if (window._mixer) window._mixer.update(window._clock.getDelta());
+  renderer.render(scene, camera);
+}}
+animate();
+
+window.addEventListener('resize', () => {{
+  camera.aspect = container.clientWidth / container.clientHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(container.clientWidth, container.clientHeight);
+}});
+
+window.copyValues = function() {{
+  const g = id => parseFloat(document.getElementById(id).value);
+  const text = `Escala: ${{g('sx')}} ${{g('sy')}} ${{g('sz')}}\\nPosicion: ${{g('px')}} ${{g('py')}} ${{g('pz')}}\\nRotacion: ${{g('rx')}} ${{g('ry')}} ${{g('rz')}}`;
+  navigator.clipboard.writeText(text).then(() => {{
+    const btn = document.querySelector('.copy-btn');
+    btn.textContent = 'Copiado!';
+    setTimeout(() => btn.textContent = 'Copiar valores', 1500);
+  }});
+}};
+</script>
+<script type="text/plain" id="model-data">{model_b64}</script>
+</body></html>"""
+
+
+# ──────────────────────────────────────────────
 # App Streamlit
 # ──────────────────────────────────────────────
 
@@ -485,8 +704,8 @@ with st.sidebar:
 
 
 # ── Pestanas ───────────────────────────────────
-tab1, tab2, tab3, tab4, tab5 = st.tabs([
-    "Proyectos", "Subir contenido", "Items AR", "Compilar", "Ayuda"
+tab1, tab2, tab3, tab_preview, tab4, tab5 = st.tabs([
+    "Proyectos", "Subir contenido", "Items AR", "Vista previa 3D", "Compilar", "Ayuda"
 ])
 
 
@@ -559,6 +778,8 @@ with tab2:
                 upload_title = st.text_input("Titulo del item")
             with col_b:
                 upload_scale = st.text_input("Escala", value="0.7 0.7 0.7")
+                upload_position = st.text_input("Posicion", value="0 0 0")
+                upload_rotation = st.text_input("Rotacion", value="0 0 0")
 
             upload_image = st.file_uploader(
                 "Imagen marcadora (foto del libro)",
@@ -607,6 +828,8 @@ with tab2:
                         "modelo":  f"{dirs['mod_prefix']}/{mod_dest.name}",
                         "titulo":  upload_title.strip(),
                         "escala":  upload_scale.strip() or "0.7 0.7 0.7",
+                        "posicion": upload_position.strip() or "0 0 0",
+                        "rotacion": upload_rotation.strip() or "0 0 0",
                     }
                     save_item(proyecto_activo["id"], new_item)
                     sync_json(proyecto_activo["id"], dirs)
@@ -642,6 +865,8 @@ with tab3:
                         st.write(f"**targetIndex:** {item['targetIndex']}")
                         st.write(f"**Modelo:** {item['modelo'].split('/')[-1]}")
                         st.write(f"**Escala:** {item['escala']}")
+                        st.write(f"**Posicion:** {item.get('posicion', '0 0 0')}")
+                        st.write(f"**Rotacion:** {item.get('rotacion', '0 0 0')}")
                         if item.get("titulo"):
                             st.write(f"**Titulo:** {item['titulo']}")
                     with col_del:
@@ -679,6 +904,8 @@ with tab3:
                 "modelo":      st.column_config.TextColumn("modelo", required=True),
                 "titulo":      st.column_config.TextColumn("titulo"),
                 "escala":      st.column_config.TextColumn("escala"),
+                "posicion":    st.column_config.TextColumn("posicion"),
+                "rotacion":    st.column_config.TextColumn("rotacion"),
             },
             hide_index=True,
         )
@@ -688,6 +915,116 @@ with tab3:
             sync_json(proyecto_activo["id"], dirs)
             st.success("Cambios guardados.")
             st.rerun()
+
+
+# ═══════════════════════════════════════════════
+# Tab Preview — Vista previa 3D
+# ═══════════════════════════════════════════════
+with tab_preview:
+    if not proyecto_activo:
+        st.info("Selecciona o crea un proyecto primero.")
+    else:
+        st.subheader(f"Vista previa 3D — {proyecto_activo['nombre']}")
+        items_prev = get_items(proyecto_activo["id"])
+        dirs_prev = get_project_dirs(proyecto_activo["nombre"])
+
+        if not items_prev:
+            st.info("Sin items. Sube contenido primero.")
+        else:
+            # Selector de item
+            item_labels = [
+                f"[{it['targetIndex']}] {it.get('titulo') or it['modelo'].split('/')[-1]}"
+                for it in items_prev
+            ]
+            sel_idx = st.selectbox("Selecciona un item", range(len(items_prev)),
+                                   format_func=lambda i: item_labels[i], key="preview_sel")
+            sel_item = items_prev[sel_idx]
+
+            model_path = resolve_path(sel_item["modelo"])
+            image_path = resolve_path(sel_item["imagen"])
+
+            if model_path is None or not model_path.exists():
+                st.error(f"Modelo no encontrado: {sel_item['modelo']}")
+            else:
+                model_size_mb = model_path.stat().st_size / (1024 * 1024)
+                if model_size_mb > 30:
+                    st.warning(f"Modelo grande ({model_size_mb:.1f} MB). La vista previa puede tardar.")
+
+                # Load / cache model in session
+                cache_key = f"preview_b64_{sel_item['modelo']}"
+                if cache_key not in st.session_state:
+                    if st.button("Cargar modelo en visor", type="primary", use_container_width=True):
+                        with st.spinner(f"Cargando modelo ({model_size_mb:.1f} MB)..."):
+                            st.session_state[cache_key] = base64.b64encode(
+                                model_path.read_bytes()
+                            ).decode()
+                        st.rerun()
+                    st.caption("Haz clic para cargar el modelo 3D en el previsualizador.")
+                else:
+                    model_b64 = st.session_state[cache_key]
+
+                    # Image for ground plane
+                    image_b64 = None
+                    image_ext = "png"
+                    if image_path and image_path.exists():
+                        image_ext = image_path.suffix.lstrip(".").lower()
+                        if image_ext == "jpg":
+                            image_ext = "jpeg"
+                        image_b64 = base64.b64encode(image_path.read_bytes()).decode()
+
+                    # Parse current values
+                    sc = _parse_vec3(sel_item.get("escala", "0.7 0.7 0.7"), (0.7, 0.7, 0.7))
+                    ps = _parse_vec3(sel_item.get("posicion", "0 0 0"))
+                    rt = _parse_vec3(sel_item.get("rotacion", "0 0 0"))
+
+                    # Render viewer
+                    html = build_3d_viewer_html(
+                        model_b64, image_b64, image_ext,
+                        sc[0], sc[1], sc[2],
+                        ps[0], ps[1], ps[2],
+                        rt[0], rt[1], rt[2],
+                    )
+                    components.html(html, height=550)
+
+                    st.caption(
+                        "Ajusta los sliders en el panel derecho del visor. "
+                        "Cuando estes conforme, copia los valores y pegalos abajo."
+                    )
+
+                    # Save form
+                    st.divider()
+                    st.subheader("Guardar transformacion")
+                    col_s, col_p, col_r = st.columns(3)
+                    with col_s:
+                        new_scale = st.text_input(
+                            "Escala (X Y Z)", value=sel_item.get("escala", "0.7 0.7 0.7"),
+                            key="prev_scale"
+                        )
+                    with col_p:
+                        new_pos = st.text_input(
+                            "Posicion (X Y Z)", value=sel_item.get("posicion", "0 0 0"),
+                            key="prev_pos"
+                        )
+                    with col_r:
+                        new_rot = st.text_input(
+                            "Rotacion (X Y Z)", value=sel_item.get("rotacion", "0 0 0"),
+                            key="prev_rot"
+                        )
+
+                    if st.button("Guardar transformacion", type="primary", use_container_width=True):
+                        sel_item["escala"] = new_scale.strip() or "0.7 0.7 0.7"
+                        sel_item["posicion"] = new_pos.strip() or "0 0 0"
+                        sel_item["rotacion"] = new_rot.strip() or "0 0 0"
+                        save_item(proyecto_activo["id"], sel_item)
+                        sync_json(proyecto_activo["id"], dirs_prev)
+                        # Invalidate cache to reload with new values
+                        del st.session_state[cache_key]
+                        st.success("Transformacion guardada.")
+                        st.rerun()
+
+                    if st.button("Recargar visor", use_container_width=True):
+                        del st.session_state[cache_key]
+                        st.rerun()
 
 
 # ═══════════════════════════════════════════════

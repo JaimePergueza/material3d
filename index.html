@@ -232,14 +232,18 @@
         imagen: './imagenes/portada0.png',
         modelo: './modelos/portada.glb',
         titulo: 'Frutas y Verduras',
-        escala: '0.7 0.7 0.7'
+        escala: '0.7 0.7 0.7',
+        posicion: '0 0 0',
+        rotacion: '0 0 0'
       },
       {
         targetIndex: 1,
         imagen: './imagenes/procesodealimentos1.png',
         modelo: './modelos/proceso.glb',
         titulo: 'Venta de productos',
-        escala: '0.7 0.7 0.7'
+        escala: '0.7 0.7 0.7',
+        posicion: '0 0 0',
+        rotacion: '0 0 0'
       }
     ];
 
@@ -304,8 +308,8 @@
 
           const model = document.createElement('a-gltf-model');
           model.setAttribute('id', `model-${item.targetIndex}`);
-          model.setAttribute('position', '0 0 0');
-          model.setAttribute('rotation', '0 0 0');
+          model.setAttribute('position', item.posicion || '0 0 0');
+          model.setAttribute('rotation', item.rotacion || '0 0 0');
           model.setAttribute('scale', item.escala || '0.7 0.7 0.7');
           model.setAttribute('visible', 'false');
           model.setAttribute('animation-mixer', '');
