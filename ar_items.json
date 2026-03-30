@@ -22,7 +22,7 @@
     "imagen": "./imagenes/Bosque.png",
     "modelo": "./modelos/low_poly_tree_scene_free.glb",
     "titulo": "Bosque",
-    "escala": "0.7 0.7 0.7",
+    "escala": "0.12 0.12 0.12",
     "posicion": "0 0 0",
     "rotacion": "0 0 0"
   },

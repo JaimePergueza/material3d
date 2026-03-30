@@ -424,11 +424,12 @@ def build_3d_viewer_html(
     sx: float, sy: float, sz: float,
     px: float, py: float, pz: float,
     rx: float, ry: float, rz: float,
+    proyecto_id: int = 0,
+    target_index: int = 0,
 ) -> str:
     img_section = ""
     if image_b64:
         img_section = f"""
-        // Marker image as ground plane
         const imgTex = new THREE.TextureLoader().load('data:image/{image_ext};base64,{image_b64}');
         imgTex.colorSpace = THREE.SRGBColorSpace;
         const planeG = new THREE.PlaneGeometry(1, 1);
@@ -444,48 +445,59 @@ def build_3d_viewer_html(
 * {{ margin:0; padding:0; box-sizing:border-box; }}
 body {{ background:#1a1a2e; font-family:Arial,sans-serif; color:#e0e0e0; overflow:hidden; display:flex; height:100vh; }}
 #viewport {{ flex:1; position:relative; }}
-#panel {{ width:260px; background:#16213e; padding:16px; overflow-y:auto; border-left:1px solid #0f3460; }}
-#panel h3 {{ color:#4299e1; margin:0 0 12px; font-size:14px; }}
-.section {{ margin-bottom:16px; }}
-.section-title {{ font-size:11px; color:#8899aa; text-transform:uppercase; letter-spacing:1px; margin-bottom:8px; }}
-.control {{ display:flex; align-items:center; gap:8px; margin-bottom:6px; }}
-.control label {{ width:16px; font-size:13px; font-weight:bold; color:#66aadd; }}
+#panel {{ width:280px; background:#16213e; padding:14px; overflow-y:auto; border-left:1px solid #0f3460; }}
+#panel h3 {{ color:#4299e1; margin:0 0 10px; font-size:14px; }}
+.section {{ margin-bottom:14px; }}
+.section-title {{ font-size:11px; color:#8899aa; text-transform:uppercase; letter-spacing:1px; margin-bottom:6px; }}
+.control {{ display:flex; align-items:center; gap:6px; margin-bottom:5px; }}
+.control label {{ width:14px; font-size:13px; font-weight:bold; color:#66aadd; }}
 .control input[type=range] {{ flex:1; accent-color:#4299e1; }}
-.control .val {{ width:50px; text-align:right; font-size:12px; font-family:monospace; color:#aaddff; }}
-.values-box {{ background:#0f3460; border-radius:6px; padding:10px; margin-top:10px; font-family:monospace; font-size:12px; line-height:1.8; }}
+.control input[type=number] {{ width:62px; background:#0f3460; border:1px solid #334466; color:#aaddff; border-radius:4px; padding:3px 4px; font-size:12px; font-family:monospace; text-align:right; }}
+.control input[type=number]:focus {{ outline:1px solid #4299e1; border-color:#4299e1; }}
+.values-box {{ background:#0f3460; border-radius:6px; padding:10px; margin-top:8px; font-family:monospace; font-size:12px; line-height:1.8; }}
 .values-box span {{ color:#4299e1; }}
-.copy-btn {{ background:#4299e1; color:#fff; border:none; border-radius:4px; padding:4px 10px; font-size:11px; cursor:pointer; margin-top:6px; }}
-.copy-btn:hover {{ background:#3182ce; }}
+.btn-row {{ display:flex; gap:6px; margin-top:8px; }}
+.btn {{ flex:1; color:#fff; border:none; border-radius:4px; padding:8px 6px; font-size:12px; font-weight:600; cursor:pointer; transition:all .2s; }}
+.btn:hover {{ filter:brightness(1.15); }}
+.btn-save {{ background:#38a169; }}
+.btn-reset {{ background:#718096; }}
+.btn-save:active,.btn-reset:active {{ transform:scale(0.96); }}
+#toast {{ position:fixed; top:12px; left:50%; transform:translateX(-50%); background:#38a169; color:#fff; padding:10px 24px; border-radius:8px; font-size:13px; font-weight:600; opacity:0; transition:opacity .3s; pointer-events:none; z-index:999; }}
+#toast.show {{ opacity:1; }}
 #info {{ position:absolute; bottom:8px; left:8px; font-size:11px; color:#556; }}
 </style></head>
 <body>
+<div id="toast">Guardando...</div>
 <div id="viewport"><div id="info">Click + arrastrar para rotar | Scroll para zoom</div></div>
 <div id="panel">
   <h3>Propiedades</h3>
   <div class="section">
     <div class="section-title">Escala</div>
-    <div class="control"><label>X</label><input type="range" id="sx" min="0.01" max="5" step="0.01" value="{sx}"><span class="val" id="sx_v">{sx}</span></div>
-    <div class="control"><label>Y</label><input type="range" id="sy" min="0.01" max="5" step="0.01" value="{sy}"><span class="val" id="sy_v">{sy}</span></div>
-    <div class="control"><label>Z</label><input type="range" id="sz" min="0.01" max="5" step="0.01" value="{sz}"><span class="val" id="sz_v">{sz}</span></div>
+    <div class="control"><label>X</label><input type="range" id="sx" min="0.01" max="5" step="0.01" value="{sx}"><input type="number" id="sx_n" min="0.01" max="10" step="0.01" value="{sx}"></div>
+    <div class="control"><label>Y</label><input type="range" id="sy" min="0.01" max="5" step="0.01" value="{sy}"><input type="number" id="sy_n" min="0.01" max="10" step="0.01" value="{sy}"></div>
+    <div class="control"><label>Z</label><input type="range" id="sz" min="0.01" max="5" step="0.01" value="{sz}"><input type="number" id="sz_n" min="0.01" max="10" step="0.01" value="{sz}"></div>
   </div>
   <div class="section">
     <div class="section-title">Posicion</div>
-    <div class="control"><label>X</label><input type="range" id="px" min="-3" max="3" step="0.01" value="{px}"><span class="val" id="px_v">{px}</span></div>
-    <div class="control"><label>Y</label><input type="range" id="py" min="-3" max="3" step="0.01" value="{py}"><span class="val" id="py_v">{py}</span></div>
-    <div class="control"><label>Z</label><input type="range" id="pz" min="-3" max="3" step="0.01" value="{pz}"><span class="val" id="pz_v">{pz}</span></div>
+    <div class="control"><label>X</label><input type="range" id="px" min="-3" max="3" step="0.01" value="{px}"><input type="number" id="px_n" min="-10" max="10" step="0.01" value="{px}"></div>
+    <div class="control"><label>Y</label><input type="range" id="py" min="-3" max="3" step="0.01" value="{py}"><input type="number" id="py_n" min="-10" max="10" step="0.01" value="{py}"></div>
+    <div class="control"><label>Z</label><input type="range" id="pz" min="-3" max="3" step="0.01" value="{pz}"><input type="number" id="pz_n" min="-10" max="10" step="0.01" value="{pz}"></div>
   </div>
   <div class="section">
     <div class="section-title">Rotacion (grados)</div>
-    <div class="control"><label>X</label><input type="range" id="rx" min="-180" max="180" step="1" value="{rx}"><span class="val" id="rx_v">{rx}</span></div>
-    <div class="control"><label>Y</label><input type="range" id="ry" min="-180" max="180" step="1" value="{ry}"><span class="val" id="ry_v">{ry}</span></div>
-    <div class="control"><label>Z</label><input type="range" id="rz" min="-180" max="180" step="1" value="{rz}"><span class="val" id="rz_v">{rz}</span></div>
+    <div class="control"><label>X</label><input type="range" id="rx" min="-180" max="180" step="1" value="{rx}"><input type="number" id="rx_n" min="-360" max="360" step="1" value="{rx}"></div>
+    <div class="control"><label>Y</label><input type="range" id="ry" min="-180" max="180" step="1" value="{ry}"><input type="number" id="ry_n" min="-360" max="360" step="1" value="{ry}"></div>
+    <div class="control"><label>Z</label><input type="range" id="rz" min="-180" max="180" step="1" value="{rz}"><input type="number" id="rz_n" min="-360" max="360" step="1" value="{rz}"></div>
   </div>
   <div class="values-box" id="values-display">
     <span>Escala:</span> {sx} {sy} {sz}<br>
     <span>Posicion:</span> {px} {py} {pz}<br>
     <span>Rotacion:</span> {rx} {ry} {rz}
   </div>
-  <button class="copy-btn" onclick="copyValues()">Copiar valores</button>
+  <div class="btn-row">
+    <button class="btn btn-reset" onclick="resetValues()">Restablecer</button>
+    <button class="btn btn-save" id="save-btn" onclick="saveValues()">Guardar en proyecto</button>
+  </div>
 </div>
 
 <script type="importmap">
@@ -518,20 +530,20 @@ const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
 controls.dampingFactor = 0.08;
 
-// Lights
 scene.add(new THREE.AmbientLight(0xffffff, 0.7));
 const dLight = new THREE.DirectionalLight(0xffffff, 1.0);
 dLight.position.set(3, 5, 4);
 scene.add(dLight);
 scene.add(new THREE.HemisphereLight(0x8899cc, 0x443322, 0.4));
 
-// Grid + axes
 scene.add(new THREE.GridHelper(4, 20, 0x334466, 0x222244));
 scene.add(new THREE.AxesHelper(0.5));
 
 {img_section}
 
-// Load model
+// Initial values for reset
+const INIT = {{sx:{sx},sy:{sy},sz:{sz},px:{px},py:{py},pz:{pz},rx:{rx},ry:{ry},rz:{rz}}};
+
 const modelB64 = document.getElementById('model-data').textContent;
 const raw = atob(modelB64);
 const arr = new Uint8Array(raw.length);
@@ -544,13 +556,8 @@ new GLTFLoader().parse(arr.buffer, '', (gltf) => {{
   model.position.set({px}, {py}, {pz});
   model.rotation.set({rx}*Math.PI/180, {ry}*Math.PI/180, {rz}*Math.PI/180);
   scene.add(model);
-
-  // Center camera target
   const box = new THREE.Box3().setFromObject(model);
-  const center = box.getCenter(new THREE.Vector3());
-  controls.target.copy(center);
-
-  // Play animations
+  controls.target.copy(box.getCenter(new THREE.Vector3()));
   if (gltf.animations.length > 0) {{
     const mixer = new THREE.AnimationMixer(model);
     gltf.animations.forEach(clip => mixer.clipAction(clip).play());
@@ -559,18 +566,27 @@ new GLTFLoader().parse(arr.buffer, '', (gltf) => {{
   }}
 }});
 
-// Slider binding
+// Sync slider <-> number input
 const ids = ['sx','sy','sz','px','py','pz','rx','ry','rz'];
 ids.forEach(id => {{
-  const el = document.getElementById(id);
-  el.addEventListener('input', () => {{
-    const v = parseFloat(el.value);
-    document.getElementById(id+'_v').textContent = v;
+  const slider = document.getElementById(id);
+  const numInput = document.getElementById(id + '_n');
+  function apply(v) {{
     if (!model) return;
     if (id[0]==='s') model.scale[id[1]] = v;
     else if (id[0]==='p') model.position[id[1]] = v;
     else model.rotation[id[1]] = v * Math.PI / 180;
     updateDisplay();
+  }}
+  slider.addEventListener('input', () => {{
+    const v = parseFloat(slider.value);
+    numInput.value = v;
+    apply(v);
+  }});
+  numInput.addEventListener('input', () => {{
+    const v = parseFloat(numInput.value);
+    slider.value = v;
+    apply(v);
   }});
 }});
 
@@ -596,14 +612,49 @@ window.addEventListener('resize', () => {{
   renderer.setSize(container.clientWidth, container.clientHeight);
 }});
 
-window.copyValues = function() {{
-  const g = id => parseFloat(document.getElementById(id).value);
-  const text = `Escala: ${{g('sx')}} ${{g('sy')}} ${{g('sz')}}\\nPosicion: ${{g('px')}} ${{g('py')}} ${{g('pz')}}\\nRotacion: ${{g('rx')}} ${{g('ry')}} ${{g('rz')}}`;
-  navigator.clipboard.writeText(text).then(() => {{
-    const btn = document.querySelector('.copy-btn');
-    btn.textContent = 'Copiado!';
-    setTimeout(() => btn.textContent = 'Copiar valores', 1500);
+// Reset to initial values
+window.resetValues = function() {{
+  ids.forEach(id => {{
+    const slider = document.getElementById(id);
+    const numInput = document.getElementById(id + '_n');
+    slider.value = INIT[id];
+    numInput.value = INIT[id];
   }});
+  if (model) {{
+    model.scale.set(INIT.sx, INIT.sy, INIT.sz);
+    model.position.set(INIT.px, INIT.py, INIT.pz);
+    model.rotation.set(INIT.rx*Math.PI/180, INIT.ry*Math.PI/180, INIT.rz*Math.PI/180);
+  }}
+  updateDisplay();
+}};
+
+// Save: navigate parent to trigger Streamlit auto-save via query params
+window.saveValues = function() {{
+  const g = id => parseFloat(document.getElementById(id).value);
+  const s = `${{g('sx')}} ${{g('sy')}} ${{g('sz')}}`;
+  const p = `${{g('px')}} ${{g('py')}} ${{g('pz')}}`;
+  const r = `${{g('rx')}} ${{g('ry')}} ${{g('rz')}}`;
+  try {{
+    // same-origin srcdoc iframe can access parent directly
+    const url = new URL(window.parent.location.href);
+    url.searchParams.set('_ar_save', '1');
+    url.searchParams.set('_ar_pid', '{proyecto_id}');
+    url.searchParams.set('_ar_idx', '{target_index}');
+    url.searchParams.set('_ar_s', s);
+    url.searchParams.set('_ar_p', p);
+    url.searchParams.set('_ar_r', r);
+    window.parent.location.href = url.toString();
+  }} catch(e) {{
+    // Fallback: open in new window (allow-popups is enabled)
+    const params = new URLSearchParams({{
+      _ar_save:'1', _ar_pid:'{proyecto_id}', _ar_idx:'{target_index}',
+      _ar_s:s, _ar_p:p, _ar_r:r
+    }});
+    const base = window.parent.location.href.split('?')[0];
+    window.open(base + '?' + params.toString(), '_parent');
+  }}
+  const toast = document.getElementById('toast');
+  toast.classList.add('show');
 }};
 </script>
 <script type="text/plain" id="model-data">{model_b64}</script>
@@ -677,30 +728,6 @@ with st.sidebar:
                 st.rerun()
 
         proyecto_activo = next(p for p in proyectos if p["nombre"] == st.session_state.proyecto_sel)
-
-        st.divider()
-        if proyecto_activo.get("descripcion"):
-            st.caption(proyecto_activo["descripcion"])
-        st.caption(f"Creado: {proyecto_activo['creado_en'][:10]}")
-
-        # URL configurable
-        vercel_url = get_setting("vercel_url", "https://material3d-chi.vercel.app")
-        st.caption("URL del proyecto:")
-        if proyecto_activo["nombre"] == "material3d":
-            st.code(f"{vercel_url.rstrip('/')}/", language=None)
-        else:
-            st.code(f"{vercel_url.rstrip('/')}/?proyecto={proyecto_activo['nombre']}", language=None)
-
-        with st.expander("Configurar URL de Vercel"):
-            nueva_url = st.text_input(
-                "URL base de Vercel",
-                value=vercel_url,
-                placeholder="https://mi-proyecto.vercel.app",
-                label_visibility="collapsed",
-            )
-            if st.button("Guardar URL", use_container_width=True):
-                set_setting("vercel_url", nueva_url.strip().rstrip("/"))
-                st.rerun()
 
 
 # ── Pestanas ───────────────────────────────────
@@ -921,6 +948,33 @@ with tab3:
 # Tab Preview — Vista previa 3D
 # ═══════════════════════════════════════════════
 with tab_preview:
+    # ── Auto-save: detect values sent from the 3D viewer via query params ──
+    _qp = st.query_params
+    if _qp.get("_ar_save") == "1":
+        _sv_idx = int(_qp.get("_ar_idx", -1))
+        _sv_pid = int(_qp.get("_ar_pid", -1))
+        _sv_s = _qp.get("_ar_s", "")
+        _sv_p = _qp.get("_ar_p", "")
+        _sv_r = _qp.get("_ar_r", "")
+        st.query_params.clear()
+        if _sv_pid > 0 and _sv_s:
+            with sqlite3.connect(DB_PATH) as _con:
+                _con.execute(
+                    "UPDATE items SET escala=?, posicion=?, rotacion=? "
+                    "WHERE proyecto_id=? AND target_index=?",
+                    (_sv_s, _sv_p, _sv_r, _sv_pid, _sv_idx),
+                )
+                _con.commit()
+            # Sync JSON files
+            _sv_proj = next((p for p in get_proyectos() if p["id"] == _sv_pid), None)
+            if _sv_proj:
+                sync_json(_sv_pid, get_project_dirs(_sv_proj["nombre"]))
+            # Clear cached viewer so it reloads with new values
+            for k in list(st.session_state.keys()):
+                if k.startswith("preview_b64_"):
+                    del st.session_state[k]
+            st.success("Transformacion guardada.")
+
     if not proyecto_activo:
         st.info("Selecciona o crea un proyecto primero.")
     else:
@@ -931,7 +985,6 @@ with tab_preview:
         if not items_prev:
             st.info("Sin items. Sube contenido primero.")
         else:
-            # Selector de item
             item_labels = [
                 f"[{it['targetIndex']}] {it.get('titulo') or it['modelo'].split('/')[-1]}"
                 for it in items_prev
@@ -950,7 +1003,6 @@ with tab_preview:
                 if model_size_mb > 30:
                     st.warning(f"Modelo grande ({model_size_mb:.1f} MB). La vista previa puede tardar.")
 
-                # Load / cache model in session
                 cache_key = f"preview_b64_{sel_item['modelo']}"
                 if cache_key not in st.session_state:
                     if st.button("Cargar modelo en visor", type="primary", use_container_width=True):
@@ -963,7 +1015,6 @@ with tab_preview:
                 else:
                     model_b64 = st.session_state[cache_key]
 
-                    # Image for ground plane
                     image_b64 = None
                     image_ext = "png"
                     if image_path and image_path.exists():
@@ -972,55 +1023,19 @@ with tab_preview:
                             image_ext = "jpeg"
                         image_b64 = base64.b64encode(image_path.read_bytes()).decode()
 
-                    # Parse current values
                     sc = _parse_vec3(sel_item.get("escala", "0.7 0.7 0.7"), (0.7, 0.7, 0.7))
                     ps = _parse_vec3(sel_item.get("posicion", "0 0 0"))
                     rt = _parse_vec3(sel_item.get("rotacion", "0 0 0"))
 
-                    # Render viewer
                     html = build_3d_viewer_html(
                         model_b64, image_b64, image_ext,
                         sc[0], sc[1], sc[2],
                         ps[0], ps[1], ps[2],
                         rt[0], rt[1], rt[2],
+                        proyecto_id=proyecto_activo["id"],
+                        target_index=sel_item["targetIndex"],
                     )
                     components.html(html, height=550)
-
-                    st.caption(
-                        "Ajusta los sliders en el panel derecho del visor. "
-                        "Cuando estes conforme, copia los valores y pegalos abajo."
-                    )
-
-                    # Save form
-                    st.divider()
-                    st.subheader("Guardar transformacion")
-                    col_s, col_p, col_r = st.columns(3)
-                    with col_s:
-                        new_scale = st.text_input(
-                            "Escala (X Y Z)", value=sel_item.get("escala", "0.7 0.7 0.7"),
-                            key="prev_scale"
-                        )
-                    with col_p:
-                        new_pos = st.text_input(
-                            "Posicion (X Y Z)", value=sel_item.get("posicion", "0 0 0"),
-                            key="prev_pos"
-                        )
-                    with col_r:
-                        new_rot = st.text_input(
-                            "Rotacion (X Y Z)", value=sel_item.get("rotacion", "0 0 0"),
-                            key="prev_rot"
-                        )
-
-                    if st.button("Guardar transformacion", type="primary", use_container_width=True):
-                        sel_item["escala"] = new_scale.strip() or "0.7 0.7 0.7"
-                        sel_item["posicion"] = new_pos.strip() or "0 0 0"
-                        sel_item["rotacion"] = new_rot.strip() or "0 0 0"
-                        save_item(proyecto_activo["id"], sel_item)
-                        sync_json(proyecto_activo["id"], dirs_prev)
-                        # Invalidate cache to reload with new values
-                        del st.session_state[cache_key]
-                        st.success("Transformacion guardada.")
-                        st.rerun()
 
                     if st.button("Recargar visor", use_container_width=True):
                         del st.session_state[cache_key]
