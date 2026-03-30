@@ -288,14 +288,11 @@ def unique_destination(folder: Path, file_name: str) -> Path:
     return candidate
 
 
-def get_next_target_index(items: list[dict]) -> int:
-    indices = []
-    for item in items:
-        try:
-            indices.append(int(item.get("targetIndex", -1)))
-        except (TypeError, ValueError):
-            pass
-    return max(indices, default=-1) + 1
+def get_next_target_index_global() -> int:
+    """Siguiente targetIndex disponible a nivel GLOBAL (todos los proyectos)."""
+    with sqlite3.connect(DB_PATH) as con:
+        row = con.execute("SELECT MAX(target_index) FROM items").fetchone()
+        return (row[0] + 1) if row[0] is not None else 0
 
 
 # ──────────────────────────────────────────────
@@ -328,7 +325,8 @@ def run_npm_install() -> tuple[bool, str]:
     return result.returncode == 0, (result.stdout + result.stderr).strip()
 
 
-def compile_targets(proyecto_id: int, nombre: str) -> tuple[bool, str]:
+def compile_targets_global() -> tuple[bool, str]:
+    """Compila UN SOLO targets.mind con las imagenes de TODOS los proyectos."""
     if not node_available():
         return False, "Node.js no disponible."
     if not npm_deps_installed():
@@ -336,34 +334,47 @@ def compile_targets(proyecto_id: int, nombre: str) -> tuple[bool, str]:
     if not COMPILE_SCRIPT.exists():
         return False, f"No se encontro {COMPILE_SCRIPT.name}."
 
-    dirs = get_project_dirs(nombre)
-    items = get_items(proyecto_id)
-    targets_mind = dirs["marcadores"] / "targets.mind"
+    # Recopilar items de TODOS los proyectos
+    all_items: list[dict] = []
+    for proyecto in get_proyectos():
+        all_items.extend(get_items(proyecto["id"]))
+
+    # Ordenar por targetIndex
+    all_items.sort(key=lambda x: int(x.get("targetIndex", 0)))
+
+    # Verificar que no haya targetIndex duplicados
+    indexes = [int(i["targetIndex"]) for i in all_items]
+    if len(indexes) != len(set(indexes)):
+        dupes = [idx for idx in set(indexes) if indexes.count(idx) > 1]
+        return False, f"Hay targetIndex duplicados entre proyectos: {dupes}. Corrige antes de compilar."
 
     image_paths: list[str] = []
-    for item in sorted(items, key=lambda x: int(x.get("targetIndex", 0))):
+    for item in all_items:
         img_path = resolve_path(item.get("imagen", ""))
         if img_path is None or not img_path.exists():
             return False, f"Imagen no encontrada para targetIndex {item.get('targetIndex')}: {item.get('imagen')}"
         image_paths.append(str(img_path))
 
     if not image_paths:
-        return False, "No hay imagenes configuradas para compilar."
+        return False, "No hay imagenes en ningun proyecto."
+
+    targets_mind = BASE_DIR / "marcadores" / "targets.mind"
+    (BASE_DIR / "marcadores").mkdir(parents=True, exist_ok=True)
 
     node = _find_cmd("node")
     cmd = [node, str(COMPILE_SCRIPT)] + image_paths + [str(targets_mind)]
 
     try:
         result = subprocess.run(
-            cmd, capture_output=True, text=True, cwd=str(BASE_DIR), timeout=180
+            cmd, capture_output=True, text=True, cwd=str(BASE_DIR), timeout=300
         )
     except subprocess.TimeoutExpired:
-        return False, "La compilacion tardo demasiado (>3 min)."
+        return False, "La compilacion tardo demasiado (>5 min)."
 
     output = (result.stdout + result.stderr).strip()
     if result.returncode != 0:
         return False, f"Error al compilar:\n{output}"
-    return True, f"targets.mind compilado con {len(image_paths)} imagen(es).\n{output}"
+    return True, f"targets.mind compilado con {len(image_paths)} imagen(es) de {len(get_proyectos())} proyecto(s).\n{output}"
 
 
 # ──────────────────────────────────────────────
@@ -529,7 +540,7 @@ with tab2:
             with col_a:
                 upload_target = st.number_input(
                     "targetIndex", min_value=0,
-                    value=get_next_target_index(items), step=1
+                    value=get_next_target_index_global(), step=1
                 )
                 upload_title = st.text_input("Titulo del item")
             with col_b:
@@ -669,69 +680,83 @@ with tab3:
 # Tab 4 — Compilar
 # ═══════════════════════════════════════════════
 with tab4:
-    if not proyecto_activo:
-        st.info("Selecciona o crea un proyecto primero.")
+    st.subheader("Compilar targets.mind")
+    st.caption(
+        "Genera UN SOLO archivo de marcadores con las imagenes de TODOS los proyectos. "
+        "MindAR usa este archivo para detectar imagenes con la camara."
+    )
+
+    col_node, col_deps = st.columns(2)
+    with col_node:
+        if node_available():
+            st.success("Node.js disponible")
+        else:
+            st.error("Node.js no encontrado")
+    with col_deps:
+        if npm_deps_installed():
+            st.success("Dependencias instaladas")
+        else:
+            st.warning("Dependencias npm no instaladas")
+
+    if not npm_deps_installed():
+        st.info("Primera vez: instala dependencias antes de compilar (puede tardar 1-2 min).")
+        if st.button("Instalar dependencias (npm install)", use_container_width=True):
+            with st.spinner("Ejecutando npm install..."):
+                ok, msg = run_npm_install()
+            if ok:
+                st.success("Dependencias instaladas correctamente.")
+                st.rerun()
+            else:
+                st.error(msg)
+
+    # Mostrar TODAS las imagenes de TODOS los proyectos
+    all_items_for_compile: list[tuple[str, dict]] = []
+    for p in proyectos:
+        for item in get_items(p["id"]):
+            all_items_for_compile.append((p["nombre"], item))
+
+    all_items_for_compile.sort(key=lambda x: int(x[1].get("targetIndex", 0)))
+
+    if all_items_for_compile:
+        st.markdown("**Imagenes a compilar (en orden de targetIndex, todos los proyectos):**")
+        all_ok = True
+        for proj_name, item in all_items_for_compile:
+            img_path = resolve_path(item.get("imagen", ""))
+            exists = img_path is not None and img_path.exists()
+            if not exists:
+                all_ok = False
+            icon = "OK" if exists else "NO ENCONTRADA"
+            st.markdown(
+                f"- `[{item['targetIndex']}]` {icon} — "
+                f"`{item['imagen'].split('/')[-1]}` — _{proj_name}_"
+            )
+        if not all_ok:
+            st.warning("Algunas imagenes no se encontraron en disco.")
+
+        # Verificar duplicados de targetIndex
+        indexes = [int(x[1]["targetIndex"]) for x in all_items_for_compile]
+        if len(indexes) != len(set(indexes)):
+            dupes = [idx for idx in set(indexes) if indexes.count(idx) > 1]
+            st.error(f"targetIndex duplicados entre proyectos: {dupes}. Corrige antes de compilar.")
     else:
-        st.subheader(f"Compilar targets.mind — {proyecto_activo['nombre']}")
-        st.caption("Genera el archivo de marcadores que usa MindAR para detectar imagenes con la camara.")
+        st.info("No hay items en ningun proyecto.")
 
-        col_node, col_deps = st.columns(2)
-        with col_node:
-            if node_available():
-                st.success("Node.js disponible")
+    targets_path = BASE_DIR / "marcadores" / "targets.mind"
+    if targets_path.exists():
+        size_kb = targets_path.stat().st_size / 1024
+        st.success(f"targets.mind actual: {size_kb:.0f} KB")
+    else:
+        st.warning("targets.mind no existe todavia.")
+
+    if node_available() and npm_deps_installed() and all_items_for_compile:
+        if st.button("Compilar targets.mind", type="primary", use_container_width=True):
+            with st.spinner("Compilando... puede tardar unos segundos."):
+                ok, msg = compile_targets_global()
+            if ok:
+                st.success("targets.mind generado correctamente.")
+                st.code(msg)
             else:
-                st.error("Node.js no encontrado")
-        with col_deps:
-            if npm_deps_installed():
-                st.success("Dependencias instaladas")
-            else:
-                st.warning("Dependencias npm no instaladas")
-
-        if not npm_deps_installed():
-            st.info("Primera vez: instala dependencias antes de compilar (puede tardar 1-2 min).")
-            if st.button("Instalar dependencias (npm install)", use_container_width=True):
-                with st.spinner("Ejecutando npm install..."):
-                    ok, msg = run_npm_install()
-                if ok:
-                    st.success("Dependencias instaladas correctamente.")
-                    st.rerun()
-                else:
-                    st.error(msg)
-
-        items = get_items(proyecto_activo["id"])
-        dirs  = get_project_dirs(proyecto_activo["nombre"])
-
-        if items:
-            st.markdown("**Imagenes a compilar (en orden):**")
-            all_ok = True
-            for item in sorted(items, key=lambda x: int(x.get("targetIndex", 0))):
-                img_path = resolve_path(item.get("imagen", ""))
-                exists = img_path is not None and img_path.exists()
-                if not exists:
-                    all_ok = False
-                icon = "OK" if exists else "NO ENCONTRADA"
-                st.markdown(f"- `[{item['targetIndex']}]` {icon} — `{item['imagen'].split('/')[-1]}`")
-            if not all_ok:
-                st.warning("Algunas imagenes no se encontraron en disco.")
-        else:
-            st.info("No hay items configurados.")
-
-        targets_path = dirs["marcadores"] / "targets.mind"
-        if targets_path.exists():
-            size_kb = targets_path.stat().st_size / 1024
-            st.success(f"targets.mind actual: {size_kb:.0f} KB")
-        else:
-            st.warning("targets.mind no existe todavia para este proyecto.")
-
-        if node_available() and npm_deps_installed() and items:
-            if st.button("Compilar targets.mind", type="primary", use_container_width=True):
-                with st.spinner("Compilando... puede tardar unos segundos."):
-                    ok, msg = compile_targets(proyecto_activo["id"], proyecto_activo["nombre"])
-                if ok:
-                    st.success("targets.mind generado correctamente.")
-                    st.code(msg)
-                else:
-                    st.error(msg)
+                st.error(msg)
 
 
 # ═══════════════════════════════════════════════

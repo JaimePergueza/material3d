@@ -503,13 +503,12 @@
       window.addEventListener('load', function() {
         console.log('🚀 Inicializando aplicación AR...');
 
-        // Configurar mindar-image con el targets.mind correcto ANTES de iniciar
-        const targetsSrc = `${_projectBase}/marcadores/targets.mind`;
+        // Configurar mindar-image — SIEMPRE usa el targets.mind raiz (compartido)
         const scene = document.getElementById('scene');
         scene.setAttribute('mindar-image',
-          `imageTargetSrc: ${targetsSrc}; autoStart: false; uiScanning: no; uiLoading: no;`
+          'imageTargetSrc: ./marcadores/targets.mind; autoStart: false; uiScanning: no; uiLoading: no;'
         );
-        console.log(`MindAR targets: ${targetsSrc} (proyecto: ${_urlProyecto || 'raiz'})`);
+        console.log(`MindAR targets: ./marcadores/targets.mind (proyecto: ${_urlProyecto || 'raiz'})`);
 
         // Iniciar AR
         initAR();
