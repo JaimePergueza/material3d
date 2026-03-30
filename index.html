@@ -186,6 +186,7 @@
   -->
   <a-scene
     id="scene"
+    mindar-image="imageTargetSrc: ./marcadores/targets.mind; autoStart: false; uiScanning: no; uiLoading: no;"
     vr-mode-ui="enabled: false"
     device-orientation-permission-ui="enabled: false"
     renderer="antialias: true; colorManagement: true; physicallyCorrectLights: true; precision: medium; alpha: true;"
@@ -502,13 +503,6 @@
       // Configurar eventos
       window.addEventListener('load', function() {
         console.log('🚀 Inicializando aplicación AR...');
-
-        // Configurar mindar-image — SIEMPRE usa el targets.mind raiz (compartido)
-        const scene = document.getElementById('scene');
-        scene.setAttribute('mindar-image',
-          'imageTargetSrc: ./marcadores/targets.mind; autoStart: false; uiScanning: no; uiLoading: no;'
-        );
-        console.log(`MindAR targets: ./marcadores/targets.mind (proyecto: ${_urlProyecto || 'raiz'})`);
 
         // Iniciar AR
         initAR();
