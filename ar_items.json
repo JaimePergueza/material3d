@@ -19,5 +19,12 @@
     "modelo": "./modelos/low_poly_tree_scene_free.glb",
     "titulo": "Bosque",
     "escala": "0.7 0.7 0.7"
+  },
+  {
+    "targetIndex": 3,
+    "imagen": "./proyectos/Menu_KFC/imagenes/ChatGPT-Image-29-mar-2026-23_06_49.png",
+    "modelo": "./proyectos/Menu_KFC/modelos/Hambur.glb",
+    "titulo": "Hamburgueza",
+    "escala": "0.7 0.7 0.7"
   }
 ]
