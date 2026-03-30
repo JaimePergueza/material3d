@@ -1,200 +1,223 @@
 import json
 import re
 import shutil
+import sqlite3
 import subprocess
 import sys
 from pathlib import Path
 
 import streamlit as st
 
-BASE_DIR = Path(__file__).resolve().parent
-CONFIG_PATH = BASE_DIR / "ar_items.json"
-IMAGES_DIR = BASE_DIR / "imagenes"
-MODELS_DIR = BASE_DIR / "modelos"
+BASE_DIR      = Path(__file__).resolve().parent
+DB_PATH       = BASE_DIR / "ar_database.sqlite"
+PROYECTOS_DIR = BASE_DIR / "proyectos"
+COMPILE_SCRIPT = BASE_DIR / "compile_targets.js"
 
 ALLOWED_IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp"}
 ALLOWED_MODEL_EXTS = {".glb", ".gltf"}
 
-DEFAULT_ITEMS = [
-    {
-        "targetIndex": 0,
-        "imagen": "./imagenes/portada.jpg",
-        "modelo": "./modelos/portada.glb",
-        "titulo": "Frutas y Verduras",
-        "escala": "0.7 0.7 0.7",
-    },
-    {
-        "targetIndex": 1,
-        "imagen": "./imagenes/proceso.jpg",
-        "modelo": "./modelos/proceso.glb",
-        "titulo": "Venta de productos",
-        "escala": "0.7 0.7 0.7",
-    },
-]
+
+# ──────────────────────────────────────────────
+# Base de datos
+# ──────────────────────────────────────────────
+
+def init_db() -> None:
+    with sqlite3.connect(DB_PATH) as con:
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS proyectos (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                nombre      TEXT UNIQUE NOT NULL,
+                descripcion TEXT DEFAULT '',
+                creado_en   TEXT DEFAULT (datetime('now'))
+            )
+        """)
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS items (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                proyecto_id  INTEGER NOT NULL,
+                target_index INTEGER NOT NULL,
+                imagen       TEXT NOT NULL,
+                modelo       TEXT NOT NULL,
+                titulo       TEXT DEFAULT '',
+                escala       TEXT DEFAULT '0.7 0.7 0.7',
+                FOREIGN KEY (proyecto_id) REFERENCES proyectos(id) ON DELETE CASCADE,
+                UNIQUE (proyecto_id, target_index)
+            )
+        """)
+        con.commit()
+
+        # Primera vez: migrar proyecto existente
+        if con.execute("SELECT COUNT(*) FROM proyectos").fetchone()[0] == 0:
+            _migrate_existing_project(con)
 
 
-def load_items() -> list[dict]:
-    if not CONFIG_PATH.exists():
-        return DEFAULT_ITEMS.copy()
-
+def _migrate_existing_project(con: sqlite3.Connection) -> None:
+    config_path = BASE_DIR / "ar_items.json"
+    if not config_path.exists():
+        return
     try:
-        data = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return DEFAULT_ITEMS.copy()
+        data = json.loads(config_path.read_text(encoding="utf-8"))
+    except Exception:
+        return
+    if not isinstance(data, list) or not data:
+        return
 
-    if not isinstance(data, list):
-        return DEFAULT_ITEMS.copy()
-
-    return data
-
-
-def normalize_items(rows: list[dict]) -> tuple[list[dict], list[str]]:
-    normalized: list[dict] = []
-    errors: list[str] = []
-    used_target_indexes: set[int] = set()
-
-    for idx, row in enumerate(rows, start=1):
-        raw_target = row.get("targetIndex", "")
-        raw_model = str(row.get("modelo", "")).strip()
-
-        # Skip completely empty rows from the editor.
-        if raw_target in ("", None) and not raw_model:
-            continue
-
-        try:
-            target_index = int(raw_target)
-        except (TypeError, ValueError):
-            errors.append(f"Fila {idx}: targetIndex debe ser un numero entero.")
-            continue
-
-        if target_index < 0:
-            errors.append(f"Fila {idx}: targetIndex no puede ser negativo.")
-            continue
-
-        if target_index in used_target_indexes:
-            errors.append(f"Fila {idx}: targetIndex {target_index} esta repetido.")
-            continue
-
-        if not raw_model:
-            errors.append(f"Fila {idx}: modelo es obligatorio.")
-            continue
-
-        used_target_indexes.add(target_index)
-
-        normalized.append(
-            {
-                "targetIndex": target_index,
-                "imagen": str(row.get("imagen", "")).strip(),
-                "modelo": raw_model,
-                "titulo": str(row.get("titulo", "")).strip(),
-                "escala": str(row.get("escala", "0.7 0.7 0.7")).strip() or "0.7 0.7 0.7",
-            }
+    cur = con.execute(
+        "INSERT INTO proyectos (nombre, descripcion) VALUES (?, ?)",
+        ("material3d", "Proyecto inicial")
+    )
+    pid = cur.lastrowid
+    for item in data:
+        con.execute(
+            "INSERT OR IGNORE INTO items (proyecto_id, target_index, imagen, modelo, titulo, escala) VALUES (?,?,?,?,?,?)",
+            (pid, int(item.get("targetIndex", 0)), item.get("imagen", ""),
+             item.get("modelo", ""), item.get("titulo", ""), item.get("escala", "0.7 0.7 0.7"))
         )
-
-    normalized.sort(key=lambda item: item["targetIndex"])
-    return normalized, errors
+    con.commit()
 
 
-def save_items(items: list[dict]) -> None:
-    CONFIG_PATH.write_text(
-        json.dumps(items, ensure_ascii=True, indent=2),
-        encoding="utf-8",
+def get_proyectos() -> list[dict]:
+    with sqlite3.connect(DB_PATH) as con:
+        con.row_factory = sqlite3.Row
+        return [dict(r) for r in con.execute(
+            "SELECT id, nombre, descripcion, creado_en FROM proyectos ORDER BY id"
+        ).fetchall()]
+
+
+def create_proyecto(nombre: str, descripcion: str) -> tuple[bool, str, int | None]:
+    nombre = nombre.strip()
+    if not nombre:
+        return False, "El nombre no puede estar vacio.", None
+    if not re.match(r'^[A-Za-z0-9_-]+$', nombre):
+        return False, "Solo letras, numeros, guiones y guiones bajos.", None
+    try:
+        with sqlite3.connect(DB_PATH) as con:
+            cur = con.execute(
+                "INSERT INTO proyectos (nombre, descripcion) VALUES (?, ?)",
+                (nombre, descripcion.strip())
+            )
+            pid = cur.lastrowid
+            con.commit()
+        root = PROYECTOS_DIR / nombre
+        (root / "imagenes").mkdir(parents=True, exist_ok=True)
+        (root / "modelos").mkdir(parents=True, exist_ok=True)
+        (root / "marcadores").mkdir(parents=True, exist_ok=True)
+        (root / "ar_items.json").write_text("[]", encoding="utf-8")
+        return True, f"Proyecto '{nombre}' creado.", pid
+    except sqlite3.IntegrityError:
+        return False, f"Ya existe un proyecto con el nombre '{nombre}'.", None
+
+
+def delete_proyecto(proyecto_id: int, delete_files: bool) -> tuple[bool, str]:
+    with sqlite3.connect(DB_PATH) as con:
+        row = con.execute("SELECT nombre FROM proyectos WHERE id = ?", (proyecto_id,)).fetchone()
+        if not row:
+            return False, "Proyecto no encontrado."
+        nombre = row[0]
+        con.execute("DELETE FROM proyectos WHERE id = ?", (proyecto_id,))
+        con.commit()
+    if delete_files and nombre != "material3d":
+        proj_dir = PROYECTOS_DIR / nombre
+        if proj_dir.exists():
+            shutil.rmtree(proj_dir)
+    return True, f"Proyecto '{nombre}' eliminado."
+
+
+def get_items(proyecto_id: int) -> list[dict]:
+    with sqlite3.connect(DB_PATH) as con:
+        con.row_factory = sqlite3.Row
+        return [
+            {
+                "targetIndex": r["target_index"],
+                "imagen": r["imagen"],
+                "modelo": r["modelo"],
+                "titulo": r["titulo"],
+                "escala": r["escala"],
+            }
+            for r in con.execute(
+                "SELECT target_index, imagen, modelo, titulo, escala FROM items "
+                "WHERE proyecto_id = ? ORDER BY target_index",
+                (proyecto_id,)
+            ).fetchall()
+        ]
+
+
+def save_item(proyecto_id: int, item: dict) -> None:
+    with sqlite3.connect(DB_PATH) as con:
+        con.execute(
+            "INSERT OR REPLACE INTO items (proyecto_id, target_index, imagen, modelo, titulo, escala) "
+            "VALUES (?,?,?,?,?,?)",
+            (proyecto_id, int(item["targetIndex"]), item["imagen"],
+             item["modelo"], item.get("titulo", ""), item.get("escala", "0.7 0.7 0.7"))
+        )
+        con.commit()
+
+
+def delete_item_db(proyecto_id: int, target_index: int) -> None:
+    with sqlite3.connect(DB_PATH) as con:
+        con.execute(
+            "DELETE FROM items WHERE proyecto_id = ? AND target_index = ?",
+            (proyecto_id, target_index)
+        )
+        con.commit()
+
+
+def replace_all_items(proyecto_id: int, items: list[dict]) -> None:
+    with sqlite3.connect(DB_PATH) as con:
+        con.execute("DELETE FROM items WHERE proyecto_id = ?", (proyecto_id,))
+        for row in items:
+            try:
+                con.execute(
+                    "INSERT INTO items (proyecto_id, target_index, imagen, modelo, titulo, escala) "
+                    "VALUES (?,?,?,?,?,?)",
+                    (proyecto_id, int(row["targetIndex"]), row.get("imagen", ""),
+                     row.get("modelo", ""), row.get("titulo", ""), row.get("escala", "0.7 0.7 0.7"))
+                )
+            except Exception:
+                pass
+        con.commit()
+
+
+def sync_json(proyecto_id: int, dirs: dict) -> None:
+    items = get_items(proyecto_id)
+    dirs["ar_items"].write_text(
+        json.dumps(items, ensure_ascii=True, indent=2), encoding="utf-8"
     )
 
 
-def ensure_asset_dirs() -> None:
-    IMAGES_DIR.mkdir(parents=True, exist_ok=True)
-    MODELS_DIR.mkdir(parents=True, exist_ok=True)
+# ──────────────────────────────────────────────
+# Rutas de proyecto
+# ──────────────────────────────────────────────
 
-
-def sanitize_filename(file_name: str) -> str:
-    cleaned = re.sub(r"[^A-Za-z0-9._-]+", "-", file_name.strip())
-    cleaned = cleaned.strip(".-_")
-    return cleaned or "archivo"
-
-
-def unique_destination(folder: Path, file_name: str) -> Path:
-    safe_name = sanitize_filename(file_name)
-    stem = Path(safe_name).stem
-    suffix = Path(safe_name).suffix.lower()
-
-    candidate = folder / f"{stem}{suffix}"
-    counter = 1
-    while candidate.exists():
-        candidate = folder / f"{stem}-{counter}{suffix}"
-        counter += 1
-    return candidate
-
-
-def get_next_target_index(rows: list[dict]) -> int:
-    max_value = -1
-    for row in rows:
-        raw_value = row.get("targetIndex", "")
-        try:
-            current = int(raw_value)
-        except (TypeError, ValueError):
-            continue
-
-        if current > max_value:
-            max_value = current
-
-    return max_value + 1
-
-
-def register_uploaded_pair(
-    *,
-    rows: list[dict],
-    target_index: int,
-    image_file,
-    model_file,
-    title: str,
-    scale: str,
-) -> tuple[bool, str, list[dict]]:
-    if any(int(row.get("targetIndex")) == target_index for row in rows if str(row.get("targetIndex", "")).strip().isdigit()):
-        return False, f"targetIndex {target_index} ya existe.", rows
-
-    if image_file is None or model_file is None:
-        return False, "Debes subir una imagen y un modelo.", rows
-
-    image_ext = Path(image_file.name).suffix.lower()
-    model_ext = Path(model_file.name).suffix.lower()
-
-    if image_ext not in ALLOWED_IMAGE_EXTS:
-        return False, f"Formato de imagen no valido: {image_ext}", rows
-
-    if model_ext not in ALLOWED_MODEL_EXTS:
-        return False, f"Formato de modelo no valido: {model_ext}", rows
-
-    ensure_asset_dirs()
-
-    image_dest = unique_destination(IMAGES_DIR, image_file.name)
-    model_dest = unique_destination(MODELS_DIR, model_file.name)
-
-    image_dest.write_bytes(image_file.getbuffer())
-    model_dest.write_bytes(model_file.getbuffer())
-
-    new_item = {
-        "targetIndex": int(target_index),
-        "imagen": f"./imagenes/{image_dest.name}",
-        "modelo": f"./modelos/{model_dest.name}",
-        "titulo": title.strip(),
-        "escala": scale.strip() or "0.7 0.7 0.7",
+def get_project_dirs(nombre: str) -> dict:
+    """Devuelve rutas absolutas y prefijos de ruta para un proyecto."""
+    if nombre == "material3d":
+        return {
+            "root":       BASE_DIR,
+            "imagenes":   BASE_DIR / "imagenes",
+            "modelos":    BASE_DIR / "modelos",
+            "marcadores": BASE_DIR / "marcadores",
+            "ar_items":   BASE_DIR / "ar_items.json",
+            "img_prefix": "./imagenes",
+            "mod_prefix": "./modelos",
+        }
+    root = PROYECTOS_DIR / nombre
+    return {
+        "root":       root,
+        "imagenes":   root / "imagenes",
+        "modelos":    root / "modelos",
+        "marcadores": root / "marcadores",
+        "ar_items":   root / "ar_items.json",
+        "img_prefix": f"./proyectos/{nombre}/imagenes",
+        "mod_prefix": f"./proyectos/{nombre}/modelos",
     }
 
-    new_rows = [*rows, new_item]
-    normalized, validation_errors = normalize_items(new_rows)
-    if validation_errors:
-        return False, " ; ".join(validation_errors), rows
 
-    save_items(normalized)
-    return True, f"Par registrado: {image_dest.name} -> {model_dest.name}", normalized
-
-
-def to_workspace_path(relative_path: str) -> Path | None:
-    raw = str(relative_path or "").strip()
+def resolve_path(relative: str) -> Path | None:
+    """Resuelve una ruta relativa (./) a ruta absoluta desde BASE_DIR."""
+    raw = str(relative or "").strip()
     if not raw.startswith("./"):
         return None
-
     candidate = (BASE_DIR / raw[2:]).resolve()
     try:
         candidate.relative_to(BASE_DIR.resolve())
@@ -203,58 +226,37 @@ def to_workspace_path(relative_path: str) -> Path | None:
     return candidate
 
 
-def delete_item_and_assets(rows: list[dict], target_index: int, delete_assets: bool) -> tuple[bool, str, list[dict]]:
-    item_to_delete = None
-    kept_rows: list[dict] = []
+def sanitize_filename(name: str) -> str:
+    cleaned = re.sub(r"[^A-Za-z0-9._-]+", "-", name.strip())
+    return cleaned.strip(".-_") or "archivo"
 
-    for row in rows:
+
+def unique_destination(folder: Path, file_name: str) -> Path:
+    safe = sanitize_filename(file_name)
+    stem, suffix = Path(safe).stem, Path(safe).suffix.lower()
+    candidate = folder / f"{stem}{suffix}"
+    n = 1
+    while candidate.exists():
+        candidate = folder / f"{stem}-{n}{suffix}"
+        n += 1
+    return candidate
+
+
+def get_next_target_index(items: list[dict]) -> int:
+    indices = []
+    for item in items:
         try:
-            row_target = int(row.get("targetIndex"))
+            indices.append(int(item.get("targetIndex", -1)))
         except (TypeError, ValueError):
-            kept_rows.append(row)
-            continue
-
-        if row_target == target_index and item_to_delete is None:
-            item_to_delete = row
-        else:
-            kept_rows.append(row)
-
-    if item_to_delete is None:
-        return False, f"No existe targetIndex {target_index}.", rows
-
-    normalized, validation_errors = normalize_items(kept_rows)
-    if validation_errors:
-        return False, " ; ".join(validation_errors), rows
-
-    if delete_assets:
-        # Elimina archivos solo si ya no se usan en los items restantes.
-        for key in ("imagen", "modelo"):
-            path_value = str(item_to_delete.get(key, "")).strip()
-            if not path_value:
-                continue
-
-            still_used = any(str(row.get(key, "")).strip() == path_value for row in normalized)
-            if still_used:
-                continue
-
-            abs_path = to_workspace_path(path_value)
-            if abs_path and abs_path.exists() and abs_path.is_file():
-                abs_path.unlink()
-
-    save_items(normalized)
-    return True, f"Item targetIndex {target_index} eliminado.", normalized
+            pass
+    return max(indices, default=-1) + 1
 
 
-# ---------------------------------------------------------------------------
+# ──────────────────────────────────────────────
 # Compilador targets.mind
-# ---------------------------------------------------------------------------
-
-COMPILE_SCRIPT = BASE_DIR / "compile_targets.js"
-TARGETS_MIND   = BASE_DIR / "marcadores" / "targets.mind"
-
+# ──────────────────────────────────────────────
 
 def _find_cmd(name: str) -> str | None:
-    """Encuentra ejecutable; en Windows prueba tambien la extension .cmd."""
     found = shutil.which(name)
     if found is None and sys.platform == "win32":
         found = shutil.which(name + ".cmd")
@@ -274,30 +276,27 @@ def run_npm_install() -> tuple[bool, str]:
     if npm is None:
         return False, "npm no encontrado. Verifica la instalacion de Node.js."
     result = subprocess.run(
-        [npm, "install"],
-        capture_output=True,
-        text=True,
-        cwd=str(BASE_DIR),
-        timeout=300,
+        [npm, "install"], capture_output=True, text=True,
+        cwd=str(BASE_DIR), timeout=300,
     )
-    output = (result.stdout + result.stderr).strip()
-    return result.returncode == 0, output
+    return result.returncode == 0, (result.stdout + result.stderr).strip()
 
 
-def compile_targets(items: list[dict]) -> tuple[bool, str]:
-    """Compila targets.mind con las imagenes de los items, en orden de targetIndex."""
+def compile_targets(proyecto_id: int, nombre: str) -> tuple[bool, str]:
     if not node_available():
-        return False, "Node.js no esta disponible en el sistema."
+        return False, "Node.js no disponible."
     if not npm_deps_installed():
-        return False, "Dependencias npm no instaladas. Usa el boton 'Instalar dependencias'."
+        return False, "Dependencias npm no instaladas. Usa 'Instalar dependencias'."
     if not COMPILE_SCRIPT.exists():
         return False, f"No se encontro {COMPILE_SCRIPT.name}."
 
-    sorted_items = sorted(items, key=lambda x: int(x.get("targetIndex", 0)))
+    dirs = get_project_dirs(nombre)
+    items = get_items(proyecto_id)
+    targets_mind = dirs["marcadores"] / "targets.mind"
 
     image_paths: list[str] = []
-    for item in sorted_items:
-        img_path = to_workspace_path(item.get("imagen", ""))
+    for item in sorted(items, key=lambda x: int(x.get("targetIndex", 0))):
+        img_path = resolve_path(item.get("imagen", ""))
         if img_path is None or not img_path.exists():
             return False, f"Imagen no encontrada para targetIndex {item.get('targetIndex')}: {item.get('imagen')}"
         image_paths.append(str(img_path))
@@ -306,230 +305,385 @@ def compile_targets(items: list[dict]) -> tuple[bool, str]:
         return False, "No hay imagenes configuradas para compilar."
 
     node = _find_cmd("node")
-    cmd  = [node, str(COMPILE_SCRIPT)] + image_paths + [str(TARGETS_MIND)]
+    cmd = [node, str(COMPILE_SCRIPT)] + image_paths + [str(targets_mind)]
 
     try:
         result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            cwd=str(BASE_DIR),
-            timeout=180,
+            cmd, capture_output=True, text=True, cwd=str(BASE_DIR), timeout=180
         )
     except subprocess.TimeoutExpired:
-        return False, "La compilacion tardo demasiado (>3 min). Intenta con menos imagenes o mas pequenas."
+        return False, "La compilacion tardo demasiado (>3 min)."
 
     output = (result.stdout + result.stderr).strip()
     if result.returncode != 0:
         return False, f"Error al compilar:\n{output}"
-
     return True, f"targets.mind compilado con {len(image_paths)} imagen(es).\n{output}"
 
 
-# ---------------------------------------------------------------------------
+# ──────────────────────────────────────────────
+# App Streamlit
+# ──────────────────────────────────────────────
 
-st.set_page_config(page_title="Config AR Libro", page_icon="AR", layout="wide")
-st.title("Panel AR: imagen -> modelo")
-st.caption(
-    "Edita las relaciones entre imagen y modelo 3D. Al guardar, index.html las carga automaticamente desde ar_items.json."
-)
+st.set_page_config(page_title="Material 3D — Panel AR", layout="wide")
+st.title("Panel AR — Material 3D")
 
-if "rows" not in st.session_state:
-    st.session_state.rows = load_items()
+init_db()
 
-ensure_asset_dirs()
+# ── Sidebar: lista de proyectos ───────────────
+proyectos = get_proyectos()
 
-st.subheader("Subir y registrar automatico")
-next_target = get_next_target_index(st.session_state.rows)
+with st.sidebar:
+    col_titulo, col_add = st.columns([3, 1])
+    with col_titulo:
+        st.subheader("Proyectos")
+    with col_add:
+        if st.button("＋", help="Nuevo proyecto", use_container_width=True):
+            st.session_state.show_new_project = not st.session_state.get("show_new_project", False)
 
-up_col_a, up_col_b = st.columns([1, 1])
-with up_col_a:
-    upload_target = st.number_input("targetIndex", min_value=0, value=next_target, step=1)
-    upload_title = st.text_input("texto", value="")
-with up_col_b:
-    upload_scale = st.text_input("escala", value="0.7 0.7 0.7")
+    # Formulario nuevo proyecto (se muestra al pulsar +)
+    if st.session_state.get("show_new_project"):
+        with st.form("form_nuevo_sidebar"):
+            nuevo_nombre = st.text_input("Nombre", placeholder="biologia-3d")
+            nueva_desc   = st.text_input("Descripcion", placeholder="AR para libro de biologia")
+            col_ok, col_cancel = st.columns(2)
+            with col_ok:
+                submitted = st.form_submit_button("Crear", type="primary")
+            with col_cancel:
+                cancelado = st.form_submit_button("Cancelar")
+            if submitted:
+                ok, msg, _ = create_proyecto(nuevo_nombre, nueva_desc)
+                if ok:
+                    st.session_state.proyecto_sel = nuevo_nombre.strip()
+                    st.session_state.show_new_project = False
+                    st.rerun()
+                else:
+                    st.error(msg)
+            if cancelado:
+                st.session_state.show_new_project = False
+                st.rerun()
 
-upload_image = st.file_uploader(
-    "Imagen del libro",
-    type=["png", "jpg", "jpeg", "webp"],
-    accept_multiple_files=False,
-)
-upload_model = st.file_uploader(
-    "Modelo 3D",
-    type=["glb", "gltf"],
-    accept_multiple_files=False,
-)
+    st.divider()
 
-preview_col_a, preview_col_b = st.columns([1, 1])
-with preview_col_a:
-    if upload_image is not None:
-        st.caption("Vista previa de imagen")
-        st.image(upload_image, use_container_width=True)
-with preview_col_b:
-    if upload_model is not None:
-        size_kb = upload_model.size / 1024
-        st.caption("Resumen de modelo")
-        st.write(f"Archivo: {upload_model.name}")
-        st.write(f"Tamano: {size_kb:.1f} KB")
-
-if st.button("Subir archivos y registrar", type="primary", use_container_width=True):
-    ok, message, updated_rows = register_uploaded_pair(
-        rows=st.session_state.rows,
-        target_index=int(upload_target),
-        image_file=upload_image,
-        model_file=upload_model,
-        title=upload_title,
-        scale=upload_scale,
-    )
-
-    if ok:
-        st.session_state.rows = updated_rows
-        st.success(message)
-        st.rerun()
+    # Lista de proyectos como items clickeables
+    nombres = [p["nombre"] for p in proyectos]
+    if not nombres:
+        st.caption("Sin proyectos todavia.")
+        proyecto_activo = None
     else:
-        st.error(message)
+        if "proyecto_sel" not in st.session_state or st.session_state.proyecto_sel not in nombres:
+            st.session_state.proyecto_sel = nombres[0]
 
-st.divider()
-st.subheader("Eliminar item")
+        for p in proyectos:
+            is_active = p["nombre"] == st.session_state.proyecto_sel
+            label = f"**{p['nombre']}**" if is_active else p["nombre"]
+            prefix = "▶ " if is_active else "　"
+            if st.button(
+                f"{prefix}{p['nombre']}",
+                key=f"sel_{p['id']}",
+                use_container_width=True,
+                type="primary" if is_active else "secondary",
+            ):
+                st.session_state.proyecto_sel = p["nombre"]
+                st.rerun()
 
-available_targets = sorted(
-    {
-        int(row.get("targetIndex"))
-        for row in st.session_state.rows
-        if str(row.get("targetIndex", "")).strip().isdigit()
-    }
-)
+        proyecto_activo = next(p for p in proyectos if p["nombre"] == st.session_state.proyecto_sel)
 
-if available_targets:
-    delete_target = st.selectbox("targetIndex a eliminar", options=available_targets)
-    delete_assets = st.checkbox("Eliminar tambien imagen/modelo si ya no se usan", value=True)
+        st.divider()
+        if proyecto_activo.get("descripcion"):
+            st.caption(proyecto_activo["descripcion"])
+        st.caption(f"Creado: {proyecto_activo['creado_en'][:10]}")
+        st.caption("URL en Vercel:")
+        if proyecto_activo["nombre"] == "material3d":
+            st.code("material3d.vercel.app/", language=None)
+        else:
+            st.code(f"material3d.vercel.app/?proyecto={proyecto_activo['nombre']}", language=None)
 
-    if st.button("Eliminar item seleccionado", type="secondary", use_container_width=True):
-        ok, message, updated_rows = delete_item_and_assets(
-            st.session_state.rows,
-            int(delete_target),
-            bool(delete_assets),
+
+# ── Pestanas ───────────────────────────────────
+tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    "Proyectos", "Subir contenido", "Items AR", "Compilar", "Ayuda"
+])
+
+
+# ═══════════════════════════════════════════════
+# Tab 1 — Proyectos
+# ═══════════════════════════════════════════════
+with tab1:
+    st.subheader("Proyectos AR")
+    st.caption("Para crear un nuevo proyecto usa el boton + en la barra lateral.")
+
+    for p in proyectos:
+        n_items = len(get_items(p["id"]))
+        is_active = p["nombre"] == st.session_state.get("proyecto_sel")
+
+        col_info, col_del = st.columns([5, 1])
+        with col_info:
+            active_mark = " — **activo**" if is_active else ""
+            st.markdown(
+                f"**{p['nombre']}**{active_mark} &nbsp;·&nbsp; {n_items} items"
+                + (f" &nbsp;·&nbsp; _{p['descripcion']}_" if p.get("descripcion") else "")
+            )
+            st.caption(f"Creado: {p['creado_en'][:10]}")
+        with col_del:
+            if p["nombre"] != "material3d":
+                if st.button("Eliminar", key=f"del_p_{p['id']}", type="secondary"):
+                    st.session_state[f"confirm_del_{p['id']}"] = True
+
+        if st.session_state.get(f"confirm_del_{p['id']}"):
+            del_files = st.checkbox(
+                f"Eliminar archivos de '{p['nombre']}' del disco",
+                key=f"delfiles_{p['id']}"
+            )
+            c1, c2 = st.columns(2)
+            with c1:
+                if st.button("Confirmar eliminacion", key=f"conf_{p['id']}", type="primary"):
+                    ok, msg = delete_proyecto(p["id"], del_files)
+                    if ok:
+                        st.success(msg)
+                        remaining = [x for x in proyectos if x["nombre"] != p["nombre"]]
+                        st.session_state.proyecto_sel = remaining[0]["nombre"] if remaining else ""
+                        st.rerun()
+                    else:
+                        st.error(msg)
+            with c2:
+                if st.button("Cancelar", key=f"cancel_{p['id']}"):
+                    del st.session_state[f"confirm_del_{p['id']}"]
+                    st.rerun()
+
+        st.divider()
+
+
+# ═══════════════════════════════════════════════
+# Tab 2 — Subir contenido
+# ═══════════════════════════════════════════════
+with tab2:
+    if not proyecto_activo:
+        st.info("Selecciona o crea un proyecto primero.")
+    else:
+        st.subheader(f"Subir contenido — {proyecto_activo['nombre']}")
+        items = get_items(proyecto_activo["id"])
+        dirs  = get_project_dirs(proyecto_activo["nombre"])
+
+        with st.form("form_subir"):
+            col_a, col_b = st.columns(2)
+            with col_a:
+                upload_target = st.number_input(
+                    "targetIndex", min_value=0,
+                    value=get_next_target_index(items), step=1
+                )
+                upload_title = st.text_input("Titulo del item")
+            with col_b:
+                upload_scale = st.text_input("Escala", value="0.7 0.7 0.7")
+
+            upload_image = st.file_uploader(
+                "Imagen marcadora (foto del libro)",
+                type=["png", "jpg", "jpeg", "webp"],
+            )
+            upload_model = st.file_uploader(
+                "Modelo 3D (.glb / .gltf)",
+                type=["glb", "gltf"],
+            )
+
+            if upload_image or upload_model:
+                pv_a, pv_b = st.columns(2)
+                with pv_a:
+                    if upload_image:
+                        st.image(upload_image, caption=upload_image.name, use_container_width=True)
+                with pv_b:
+                    if upload_model:
+                        st.write(f"**{upload_model.name}**")
+                        st.write(f"Tamano: {upload_model.size / 1024:.1f} KB")
+
+            if st.form_submit_button("Guardar item", type="primary", use_container_width=True):
+                err = None
+                if upload_image is None or upload_model is None:
+                    err = "Debes subir imagen y modelo."
+                elif any(int(i["targetIndex"]) == int(upload_target) for i in items):
+                    err = f"targetIndex {int(upload_target)} ya existe."
+                elif Path(upload_image.name).suffix.lower() not in ALLOWED_IMAGE_EXTS:
+                    err = f"Formato de imagen no valido: {Path(upload_image.name).suffix}"
+                elif Path(upload_model.name).suffix.lower() not in ALLOWED_MODEL_EXTS:
+                    err = f"Formato de modelo no valido: {Path(upload_model.name).suffix}"
+
+                if err:
+                    st.error(err)
+                else:
+                    dirs["imagenes"].mkdir(parents=True, exist_ok=True)
+                    dirs["modelos"].mkdir(parents=True, exist_ok=True)
+
+                    img_dest = unique_destination(dirs["imagenes"], upload_image.name)
+                    mod_dest = unique_destination(dirs["modelos"], upload_model.name)
+                    img_dest.write_bytes(upload_image.getbuffer())
+                    mod_dest.write_bytes(upload_model.getbuffer())
+
+                    new_item = {
+                        "targetIndex": int(upload_target),
+                        "imagen":  f"{dirs['img_prefix']}/{img_dest.name}",
+                        "modelo":  f"{dirs['mod_prefix']}/{mod_dest.name}",
+                        "titulo":  upload_title.strip(),
+                        "escala":  upload_scale.strip() or "0.7 0.7 0.7",
+                    }
+                    save_item(proyecto_activo["id"], new_item)
+                    sync_json(proyecto_activo["id"], dirs)
+                    st.success(f"Item guardado: {img_dest.name} -> {mod_dest.name}")
+                    st.rerun()
+
+
+# ═══════════════════════════════════════════════
+# Tab 3 — Items AR
+# ═══════════════════════════════════════════════
+with tab3:
+    if not proyecto_activo:
+        st.info("Selecciona o crea un proyecto primero.")
+    else:
+        st.subheader(f"Items AR — {proyecto_activo['nombre']}")
+        items = get_items(proyecto_activo["id"])
+        dirs  = get_project_dirs(proyecto_activo["nombre"])
+
+        if not items:
+            st.info("Sin items. Sube contenido en la pestana 'Subir contenido'.")
+        else:
+            for item in items:
+                label = f"[{item['targetIndex']}] {item.get('titulo') or item['imagen'].split('/')[-1]}"
+                with st.expander(label):
+                    col_img, col_info, col_del = st.columns([2, 3, 1])
+                    with col_img:
+                        img_abs = resolve_path(item["imagen"])
+                        if img_abs and img_abs.exists():
+                            st.image(str(img_abs), use_container_width=True)
+                        else:
+                            st.caption(f"`{item['imagen']}`")
+                    with col_info:
+                        st.write(f"**targetIndex:** {item['targetIndex']}")
+                        st.write(f"**Modelo:** {item['modelo'].split('/')[-1]}")
+                        st.write(f"**Escala:** {item['escala']}")
+                        if item.get("titulo"):
+                            st.write(f"**Titulo:** {item['titulo']}")
+                    with col_del:
+                        if st.button("Eliminar", key=f"del_item_{item['targetIndex']}"):
+                            delete_item_db(proyecto_activo["id"], item["targetIndex"])
+                            sync_json(proyecto_activo["id"], dirs)
+                            st.rerun()
+
+        st.divider()
+        st.subheader("Edicion manual")
+
+        edited = st.data_editor(
+            items,
+            num_rows="dynamic",
+            use_container_width=True,
+            column_config={
+                "targetIndex": st.column_config.NumberColumn("targetIndex", step=1, min_value=0, required=True),
+                "imagen":      st.column_config.TextColumn("imagen"),
+                "modelo":      st.column_config.TextColumn("modelo", required=True),
+                "titulo":      st.column_config.TextColumn("titulo"),
+                "escala":      st.column_config.TextColumn("escala"),
+            },
+            hide_index=True,
         )
-        if ok:
-            st.session_state.rows = updated_rows
-            st.success(message)
+
+        if st.button("Guardar cambios", type="primary", use_container_width=True):
+            replace_all_items(proyecto_activo["id"], edited)
+            sync_json(proyecto_activo["id"], dirs)
+            st.success("Cambios guardados.")
             st.rerun()
-        else:
-            st.error(message)
-else:
-    st.info("No hay items para eliminar.")
 
-st.divider()
-st.subheader("Edicion manual")
 
-col_a, col_b = st.columns([1, 1])
-with col_a:
-    if st.button("Recargar desde archivo", use_container_width=True):
-        st.session_state.rows = load_items()
-
-with col_b:
-    if st.button("Agregar fila vacia", use_container_width=True):
-        st.session_state.rows.append(
-            {
-                "targetIndex": "",
-                "imagen": "",
-                "modelo": "",
-                "titulo": "",
-                "escala": "0.7 0.7 0.7",
-            }
-        )
-
-edited_rows = st.data_editor(
-    st.session_state.rows,
-    num_rows="dynamic",
-    use_container_width=True,
-    column_config={
-        "targetIndex": st.column_config.NumberColumn("targetIndex", step=1, min_value=0, required=True),
-        "imagen": st.column_config.TextColumn("imagen", help="Referencia de imagen del libro."),
-        "modelo": st.column_config.TextColumn("modelo", required=True, help="Ruta del .glb o .gltf."),
-        "titulo": st.column_config.TextColumn("texto"),
-        "escala": st.column_config.TextColumn("escala", help="Formato: x y z. Ejemplo: 0.7 0.7 0.7"),
-    },
-    hide_index=True,
-)
-
-st.session_state.rows = edited_rows
-
-if st.button("Guardar configuracion", type="primary", use_container_width=True):
-    cleaned, validation_errors = normalize_items(edited_rows)
-
-    if validation_errors:
-        for err in validation_errors:
-            st.error(err)
+# ═══════════════════════════════════════════════
+# Tab 4 — Compilar
+# ═══════════════════════════════════════════════
+with tab4:
+    if not proyecto_activo:
+        st.info("Selecciona o crea un proyecto primero.")
     else:
-        save_items(cleaned)
-        st.success(f"Configuracion guardada en {CONFIG_PATH.name} con {len(cleaned)} item(s).")
+        st.subheader(f"Compilar targets.mind — {proyecto_activo['nombre']}")
+        st.caption("Genera el archivo de marcadores que usa MindAR para detectar imagenes con la camara.")
 
-st.divider()
-st.subheader("Compilar targets.mind")
-st.caption("Genera el archivo de marcadores que usa MindAR para detectar imagenes con la camara.")
+        col_node, col_deps = st.columns(2)
+        with col_node:
+            if node_available():
+                st.success("Node.js disponible")
+            else:
+                st.error("Node.js no encontrado")
+        with col_deps:
+            if npm_deps_installed():
+                st.success("Dependencias instaladas")
+            else:
+                st.warning("Dependencias npm no instaladas")
 
-# Estado del entorno
-col_node, col_deps = st.columns(2)
-with col_node:
-    if node_available():
-        st.success("Node.js disponible")
-    else:
-        st.error("Node.js no encontrado")
+        if not npm_deps_installed():
+            st.info("Primera vez: instala dependencias antes de compilar (puede tardar 1-2 min).")
+            if st.button("Instalar dependencias (npm install)", use_container_width=True):
+                with st.spinner("Ejecutando npm install..."):
+                    ok, msg = run_npm_install()
+                if ok:
+                    st.success("Dependencias instaladas correctamente.")
+                    st.rerun()
+                else:
+                    st.error(msg)
 
-with col_deps:
-    if npm_deps_installed():
-        st.success("Dependencias instaladas")
-    else:
-        st.warning("Dependencias npm no instaladas")
+        items = get_items(proyecto_activo["id"])
+        dirs  = get_project_dirs(proyecto_activo["nombre"])
 
-# Instalar dependencias (solo hace falta una vez)
-if not npm_deps_installed():
-    st.info("Primera vez: instala las dependencias de Node.js antes de compilar (puede tardar 1-2 min).")
-    if st.button("Instalar dependencias (npm install)", use_container_width=True):
-        with st.spinner("Ejecutando npm install..."):
-            ok, msg = run_npm_install()
-        if ok:
-            st.success("Dependencias instaladas correctamente.")
-            st.rerun()
+        if items:
+            st.markdown("**Imagenes a compilar (en orden):**")
+            all_ok = True
+            for item in sorted(items, key=lambda x: int(x.get("targetIndex", 0))):
+                img_path = resolve_path(item.get("imagen", ""))
+                exists = img_path is not None and img_path.exists()
+                if not exists:
+                    all_ok = False
+                icon = "OK" if exists else "NO ENCONTRADA"
+                st.markdown(f"- `[{item['targetIndex']}]` {icon} — `{item['imagen'].split('/')[-1]}`")
+            if not all_ok:
+                st.warning("Algunas imagenes no se encontraron en disco.")
         else:
-            st.error(msg)
+            st.info("No hay items configurados.")
 
-# Mostrar orden de imagenes que se compilaran
-if st.session_state.rows:
-    sorted_for_compile = sorted(
-        [r for r in st.session_state.rows if str(r.get("targetIndex", "")).strip().isdigit()],
-        key=lambda x: int(x["targetIndex"]),
-    )
-    if sorted_for_compile:
-        st.markdown("**Imagenes que se compilaran (en este orden):**")
-        for item in sorted_for_compile:
-            img_path = to_workspace_path(item.get("imagen", ""))
-            exists   = img_path is not None and img_path.exists()
-            icon     = "✅" if exists else "❌"
-            st.markdown(f"- `[{item['targetIndex']}]` {icon} `{item.get('imagen', '')}`")
-
-# Boton de compilacion
-if node_available() and npm_deps_installed():
-    if st.button("Compilar targets.mind", type="primary", use_container_width=True):
-        with st.spinner("Compilando... esto puede tardar unos segundos."):
-            ok, msg = compile_targets(st.session_state.rows)
-        if ok:
-            st.success("targets.mind generado correctamente.")
-            st.code(msg)
+        targets_path = dirs["marcadores"] / "targets.mind"
+        if targets_path.exists():
+            size_kb = targets_path.stat().st_size / 1024
+            st.success(f"targets.mind actual: {size_kb:.0f} KB")
         else:
-            st.error(msg)
+            st.warning("targets.mind no existe todavia para este proyecto.")
 
-st.divider()
-st.subheader("Como usar")
-st.markdown(
-    "\n".join(
-        [
-            "1. Usa 'Subir y registrar automatico' para cargar imagen y modelo sin escribir rutas.",
-            "2. El sistema guarda archivos en ./imagenes y ./modelos, y actualiza ar_items.json.",
-            "3. targetIndex debe coincidir con el orden de imagenes en targets.mind.",
-            "4. Recarga la pagina AR para ver los cambios.",
-            "5. Si agregas nuevas imagenes objetivo, usa la seccion 'Compilar targets.mind' para regenerar el archivo de marcadores.",
-        ]
-    )
-)
+        if node_available() and npm_deps_installed() and items:
+            if st.button("Compilar targets.mind", type="primary", use_container_width=True):
+                with st.spinner("Compilando... puede tardar unos segundos."):
+                    ok, msg = compile_targets(proyecto_activo["id"], proyecto_activo["nombre"])
+                if ok:
+                    st.success("targets.mind generado correctamente.")
+                    st.code(msg)
+                else:
+                    st.error(msg)
+
+
+# ═══════════════════════════════════════════════
+# Tab 5 — Ayuda
+# ═══════════════════════════════════════════════
+with tab5:
+    st.subheader("Como usar")
+    st.markdown("""
+### Flujo de trabajo por proyecto
+
+1. **Proyectos** — Crea un proyecto nuevo o selecciona uno existente en la barra lateral.
+2. **Subir contenido** — Sube la imagen marcadora (foto del libro) y el modelo 3D `.glb`.
+   - El `targetIndex` se asigna automaticamente.
+3. **Items AR** — Revisa, edita o elimina items. Puedes ajustar escala y titulo aqui.
+4. **Compilar** — Genera `targets.mind` para que MindAR detecte las imagenes con la camara.
+   - Recompila solo cuando cambies las imagenes marcadoras.
+5. **Git push** — Sube los cambios a GitHub y Vercel desplegara automaticamente.
+
+### URLs en Vercel
+
+| Proyecto | URL |
+|----------|-----|
+| `material3d` (raiz) | `https://material3d.vercel.app/` |
+| Cualquier otro | `https://material3d.vercel.app/?proyecto=nombre` |
+
+### Importante
+
+- `targetIndex` debe coincidir con el orden de compilacion en `targets.mind`.
+- Siempre recompila despues de cambiar imagenes marcadoras.
+- Los modelos GLB pueden pesar bastante — considera optimizarlos antes de subir.
+    """)

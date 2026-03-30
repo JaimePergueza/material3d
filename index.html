@@ -187,6 +187,7 @@
   <a-scene
     id="scene"
     mindar-image="imageTargetSrc: ./marcadores/targets.mind; autoStart: false; uiScanning: no; uiLoading: no;"
+    data-mindar-default-src="./marcadores/targets.mind"
     vr-mode-ui="enabled: false"
     device-orientation-permission-ui="enabled: false"
     renderer="antialias: true; colorManagement: true; physicallyCorrectLights: true; precision: medium; alpha: true;"
@@ -252,9 +253,14 @@
       let threeRenderer = null;
       let trackingActive = false;
 
+      // Detectar proyecto desde URL (?proyecto=nombre)
+      const _urlProyecto = new URLSearchParams(window.location.search).get('proyecto');
+      const _projectBase = _urlProyecto ? `./proyectos/${_urlProyecto}` : '.';
+
       async function loadARItems() {
+        const jsonUrl = `${_projectBase}/ar_items.json?v=${Date.now()}`;
         try {
-          const response = await fetch(`./ar_items.json?v=${Date.now()}`);
+          const response = await fetch(jsonUrl);
           if (!response.ok) {
             throw new Error(`HTTP ${response.status}`);
           }
@@ -266,9 +272,9 @@
 
           if (data.length > 0) {
             AR_ITEMS = data;
-            console.log(`Configuracion AR cargada desde archivo: ${AR_ITEMS.length} item(s).`);
+            console.log(`Configuracion AR cargada (proyecto: ${_urlProyecto || 'raiz'}): ${AR_ITEMS.length} item(s).`);
           } else {
-            console.warn('ar_items.json está vacío, usando datos por defecto.');
+            console.warn('ar_items.json esta vacio, usando datos por defecto.');
             AR_ITEMS = AR_ITEMS_DEFAULT.slice();
           }
         } catch (error) {
@@ -369,6 +375,15 @@
           arSystem = sceneEl.systems['mindar-image-system'];
           if (!arSystem) {
             throw new Error('No se encontro mindar-image-system en la escena.');
+          }
+
+          // Actualizar targets.mind si es un proyecto distinto al raiz
+          if (_urlProyecto) {
+            const targetsSrc = `${_projectBase}/marcadores/targets.mind`;
+            sceneEl.setAttribute('mindar-image',
+              `imageTargetSrc: ${targetsSrc}; autoStart: false; uiScanning: no; uiLoading: no;`
+            );
+            console.log(`MindAR targets: ${targetsSrc}`);
           }
 
           await Promise.race([
