@@ -186,8 +186,6 @@
   -->
   <a-scene
     id="scene"
-    mindar-image="imageTargetSrc: ./marcadores/targets.mind; autoStart: false; uiScanning: no; uiLoading: no;"
-    data-mindar-default-src="./marcadores/targets.mind"
     vr-mode-ui="enabled: false"
     device-orientation-permission-ui="enabled: false"
     renderer="antialias: true; colorManagement: true; physicallyCorrectLights: true; precision: medium; alpha: true;"
@@ -377,15 +375,6 @@
             throw new Error('No se encontro mindar-image-system en la escena.');
           }
 
-          // Actualizar targets.mind si es un proyecto distinto al raiz
-          if (_urlProyecto) {
-            const targetsSrc = `${_projectBase}/marcadores/targets.mind`;
-            sceneEl.setAttribute('mindar-image',
-              `imageTargetSrc: ${targetsSrc}; autoStart: false; uiScanning: no; uiLoading: no;`
-            );
-            console.log(`MindAR targets: ${targetsSrc}`);
-          }
-
           await Promise.race([
             arSystem.start(),
             new Promise((_, reject) => {
@@ -513,7 +502,15 @@
       // Configurar eventos
       window.addEventListener('load', function() {
         console.log('🚀 Inicializando aplicación AR...');
-        
+
+        // Configurar mindar-image con el targets.mind correcto ANTES de iniciar
+        const targetsSrc = `${_projectBase}/marcadores/targets.mind`;
+        const scene = document.getElementById('scene');
+        scene.setAttribute('mindar-image',
+          `imageTargetSrc: ${targetsSrc}; autoStart: false; uiScanning: no; uiLoading: no;`
+        );
+        console.log(`MindAR targets: ${targetsSrc} (proyecto: ${_urlProyecto || 'raiz'})`);
+
         // Iniciar AR
         initAR();
 
