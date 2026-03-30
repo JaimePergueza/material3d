@@ -252,12 +252,10 @@
       let threeRenderer = null;
       let trackingActive = false;
 
-      // Detectar proyecto desde URL (?proyecto=nombre)
-      const _urlProyecto = new URLSearchParams(window.location.search).get('proyecto');
-      const _projectBase = _urlProyecto ? `./proyectos/${_urlProyecto}` : '.';
-
+      // Siempre cargar el ar_items.json global (raíz) que contiene
+      // TODOS los items de TODOS los proyectos, en sincronía con targets.mind
       async function loadARItems() {
-        const jsonUrl = `${_projectBase}/ar_items.json?v=${Date.now()}`;
+        const jsonUrl = `./ar_items.json?v=${Date.now()}`;
         try {
           const response = await fetch(jsonUrl);
           if (!response.ok) {
@@ -271,7 +269,7 @@
 
           if (data.length > 0) {
             AR_ITEMS = data;
-            console.log(`Configuracion AR cargada (proyecto: ${_urlProyecto || 'raiz'}): ${AR_ITEMS.length} item(s).`);
+            console.log(`Configuracion AR cargada (global): ${AR_ITEMS.length} item(s).`);
           } else {
             console.warn('ar_items.json esta vacio, usando datos por defecto.');
             AR_ITEMS = AR_ITEMS_DEFAULT.slice();

@@ -121,7 +121,6 @@ def create_proyecto(nombre: str, descripcion: str) -> tuple[bool, str, int | Non
         root = PROYECTOS_DIR / nombre
         (root / "imagenes").mkdir(parents=True, exist_ok=True)
         (root / "modelos").mkdir(parents=True, exist_ok=True)
-        (root / "marcadores").mkdir(parents=True, exist_ok=True)
         (root / "ar_items.json").write_text("[]", encoding="utf-8")
         return True, f"Proyecto '{nombre}' creado.", pid
     except sqlite3.IntegrityError:
@@ -140,6 +139,7 @@ def delete_proyecto(proyecto_id: int, delete_files: bool) -> tuple[bool, str]:
         proj_dir = PROYECTOS_DIR / nombre
         if proj_dir.exists():
             shutil.rmtree(proj_dir)
+    sync_global_json()
     return True, f"Proyecto '{nombre}' eliminado."
 
 
@@ -229,6 +229,20 @@ def sync_json(proyecto_id: int, dirs: dict) -> None:
     dirs["ar_items"].write_text(
         json.dumps(items, ensure_ascii=True, indent=2), encoding="utf-8"
     )
+    sync_global_json()
+
+
+def sync_global_json() -> None:
+    """Escribe el ar_items.json raíz con TODOS los items de TODOS los proyectos,
+    ordenados por targetIndex. Esto mantiene sincronía con el targets.mind global."""
+    all_items: list[dict] = []
+    for proyecto in get_proyectos():
+        all_items.extend(get_items(proyecto["id"]))
+    all_items.sort(key=lambda x: int(x.get("targetIndex", 0)))
+    global_json = BASE_DIR / "ar_items.json"
+    global_json.write_text(
+        json.dumps(all_items, ensure_ascii=True, indent=2), encoding="utf-8"
+    )
 
 
 # ──────────────────────────────────────────────
@@ -252,7 +266,6 @@ def get_project_dirs(nombre: str) -> dict:
         "root":       root,
         "imagenes":   root / "imagenes",
         "modelos":    root / "modelos",
-        "marcadores": root / "marcadores",
         "ar_items":   root / "ar_items.json",
         "img_prefix": f"./proyectos/{nombre}/imagenes",
         "mod_prefix": f"./proyectos/{nombre}/modelos",
@@ -374,6 +387,7 @@ def compile_targets_global() -> tuple[bool, str]:
     output = (result.stdout + result.stderr).strip()
     if result.returncode != 0:
         return False, f"Error al compilar:\n{output}"
+    sync_global_json()
     return True, f"targets.mind compilado con {len(image_paths)} imagen(es) de {len(get_proyectos())} proyecto(s).\n{output}"
 
 
