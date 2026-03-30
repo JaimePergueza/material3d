@@ -19,12 +19,5 @@
     "modelo": "./modelos/low_poly_tree_scene_free.glb",
     "titulo": "Bosque",
     "escala": "0.7 0.7 0.7"
-  },
-  {
-    "targetIndex": 3,
-    "imagen": "./imagenes/Hambur.jpeg",
-    "modelo": "./modelos/Hambur.glb",
-    "titulo": "",
-    "escala": "0.7 0.7 0.7"
   }
 ]

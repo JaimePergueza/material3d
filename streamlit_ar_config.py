@@ -173,13 +173,39 @@ def save_item(proyecto_id: int, item: dict) -> None:
         con.commit()
 
 
-def delete_item_db(proyecto_id: int, target_index: int) -> None:
+def delete_item_db(proyecto_id: int, target_index: int, delete_files: bool = False) -> None:
     with sqlite3.connect(DB_PATH) as con:
+        con.row_factory = sqlite3.Row
+        # Obtener item antes de borrar (para eliminar archivos)
+        item_row = con.execute(
+            "SELECT imagen, modelo FROM items WHERE proyecto_id = ? AND target_index = ?",
+            (proyecto_id, target_index)
+        ).fetchone()
+
         con.execute(
             "DELETE FROM items WHERE proyecto_id = ? AND target_index = ?",
             (proyecto_id, target_index)
         )
         con.commit()
+
+        if delete_files and item_row:
+            # Solo borrar si ningun otro item usa el mismo archivo
+            remaining_imgs = {r[0] for r in con.execute(
+                "SELECT imagen FROM items WHERE proyecto_id = ?", (proyecto_id,)
+            ).fetchall()}
+            remaining_mods = {r[0] for r in con.execute(
+                "SELECT modelo FROM items WHERE proyecto_id = ?", (proyecto_id,)
+            ).fetchall()}
+
+            if item_row["imagen"] not in remaining_imgs:
+                img_path = resolve_path(item_row["imagen"])
+                if img_path and img_path.exists():
+                    img_path.unlink()
+
+            if item_row["modelo"] not in remaining_mods:
+                mod_path = resolve_path(item_row["modelo"])
+                if mod_path and mod_path.exists():
+                    mod_path.unlink()
 
 
 def replace_all_items(proyecto_id: int, items: list[dict]) -> None:
@@ -595,8 +621,24 @@ with tab3:
                             st.write(f"**Titulo:** {item['titulo']}")
                     with col_del:
                         if st.button("Eliminar", key=f"del_item_{item['targetIndex']}"):
-                            delete_item_db(proyecto_activo["id"], item["targetIndex"])
+                            st.session_state[f"confirm_del_item_{item['targetIndex']}"] = True
+
+                if st.session_state.get(f"confirm_del_item_{item['targetIndex']}"):
+                    del_files = st.checkbox(
+                        "Eliminar tambien imagen y modelo del disco",
+                        value=True,
+                        key=f"delfiles_item_{item['targetIndex']}"
+                    )
+                    c1, c2 = st.columns(2)
+                    with c1:
+                        if st.button("Confirmar", key=f"conf_item_{item['targetIndex']}", type="primary"):
+                            delete_item_db(proyecto_activo["id"], item["targetIndex"], delete_files=del_files)
                             sync_json(proyecto_activo["id"], dirs)
+                            del st.session_state[f"confirm_del_item_{item['targetIndex']}"]
+                            st.rerun()
+                    with c2:
+                        if st.button("Cancelar", key=f"cancel_item_{item['targetIndex']}"):
+                            del st.session_state[f"confirm_del_item_{item['targetIndex']}"]
                             st.rerun()
 
         st.divider()
