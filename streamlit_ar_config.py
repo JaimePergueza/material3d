@@ -462,7 +462,8 @@ body {{ background:#1a1a2e; font-family:Arial,sans-serif; color:#e0e0e0; overflo
 .btn-save {{ background:#38a169; }}
 .btn-reset {{ background:#718096; }}
 .btn-save:active,.btn-reset:active {{ transform:scale(0.96); }}
-#toast {{ position:fixed; top:12px; left:50%; transform:translateX(-50%); background:#38a169; color:#fff; padding:10px 24px; border-radius:8px; font-size:13px; font-weight:600; opacity:0; transition:opacity .3s; pointer-events:none; z-index:999; }}
+#toast {{ position:fixed; top:12px; left:50%; transform:translateX(-50%); background:#2d3748; color:#fff; padding:12px 20px; border-radius:10px; font-size:12px; opacity:0; transition:opacity .3s; pointer-events:none; z-index:999; text-align:center; border:1px solid #4299e1; }}
+#toast code {{ display:block; margin-top:4px; color:#90cdf4; font-size:11px; line-height:1.6; }}
 #toast.show {{ opacity:1; }}
 #info {{ position:absolute; bottom:8px; left:8px; font-size:11px; color:#556; }}
 </style></head>
@@ -628,33 +629,21 @@ window.resetValues = function() {{
   updateDisplay();
 }};
 
-// Save: navigate parent to trigger Streamlit auto-save via query params
+// Save: copy values to clipboard and show them in the toast
 window.saveValues = function() {{
   const g = id => parseFloat(document.getElementById(id).value);
   const s = `${{g('sx')}} ${{g('sy')}} ${{g('sz')}}`;
   const p = `${{g('px')}} ${{g('py')}} ${{g('pz')}}`;
   const r = `${{g('rx')}} ${{g('ry')}} ${{g('rz')}}`;
-  try {{
-    // same-origin srcdoc iframe can access parent directly
-    const url = new URL(window.parent.location.href);
-    url.searchParams.set('_ar_save', '1');
-    url.searchParams.set('_ar_pid', '{proyecto_id}');
-    url.searchParams.set('_ar_idx', '{target_index}');
-    url.searchParams.set('_ar_s', s);
-    url.searchParams.set('_ar_p', p);
-    url.searchParams.set('_ar_r', r);
-    window.parent.location.href = url.toString();
-  }} catch(e) {{
-    // Fallback: open in new window (allow-popups is enabled)
-    const params = new URLSearchParams({{
-      _ar_save:'1', _ar_pid:'{proyecto_id}', _ar_idx:'{target_index}',
-      _ar_s:s, _ar_p:p, _ar_r:r
-    }});
-    const base = window.parent.location.href.split('?')[0];
-    window.open(base + '?' + params.toString(), '_parent');
-  }}
+  const text = s + '\\n' + p + '\\n' + r;
+
+  navigator.clipboard.writeText(text).catch(() => {{}});
+
   const toast = document.getElementById('toast');
+  toast.innerHTML = '<b>Copiado</b><br><code>' +
+    'E: ' + s + '<br>P: ' + p + '<br>R: ' + r + '</code>';
   toast.classList.add('show');
+  setTimeout(() => toast.classList.remove('show'), 4000);
 }};
 </script>
 <script type="text/plain" id="model-data">{model_b64}</script>
@@ -948,33 +937,6 @@ with tab3:
 # Tab Preview — Vista previa 3D
 # ═══════════════════════════════════════════════
 with tab_preview:
-    # ── Auto-save: detect values sent from the 3D viewer via query params ──
-    _qp = st.query_params
-    if _qp.get("_ar_save") == "1":
-        _sv_idx = int(_qp.get("_ar_idx", -1))
-        _sv_pid = int(_qp.get("_ar_pid", -1))
-        _sv_s = _qp.get("_ar_s", "")
-        _sv_p = _qp.get("_ar_p", "")
-        _sv_r = _qp.get("_ar_r", "")
-        st.query_params.clear()
-        if _sv_pid > 0 and _sv_s:
-            with sqlite3.connect(DB_PATH) as _con:
-                _con.execute(
-                    "UPDATE items SET escala=?, posicion=?, rotacion=? "
-                    "WHERE proyecto_id=? AND target_index=?",
-                    (_sv_s, _sv_p, _sv_r, _sv_pid, _sv_idx),
-                )
-                _con.commit()
-            # Sync JSON files
-            _sv_proj = next((p for p in get_proyectos() if p["id"] == _sv_pid), None)
-            if _sv_proj:
-                sync_json(_sv_pid, get_project_dirs(_sv_proj["nombre"]))
-            # Clear cached viewer so it reloads with new values
-            for k in list(st.session_state.keys()):
-                if k.startswith("preview_b64_"):
-                    del st.session_state[k]
-            st.success("Transformacion guardada.")
-
     if not proyecto_activo:
         st.info("Selecciona o crea un proyecto primero.")
     else:
@@ -1037,9 +999,44 @@ with tab_preview:
                     )
                     components.html(html, height=550)
 
-                    if st.button("Recargar visor", use_container_width=True):
-                        del st.session_state[cache_key]
-                        st.rerun()
+                    # ── Guardar transformacion ──
+                    st.divider()
+                    st.caption(
+                        'Ajusta los valores en el visor, luego haz clic en **"Guardar en proyecto"** '
+                        'para copiarlos. Pegalos abajo y haz clic en **Guardar**.'
+                    )
+                    col_s, col_p, col_r = st.columns(3)
+                    with col_s:
+                        new_scale = st.text_input(
+                            "Escala", value=sel_item.get("escala", "0.7 0.7 0.7"),
+                            key=f"ps_{sel_item['targetIndex']}"
+                        )
+                    with col_p:
+                        new_pos = st.text_input(
+                            "Posicion", value=sel_item.get("posicion", "0 0 0"),
+                            key=f"pp_{sel_item['targetIndex']}"
+                        )
+                    with col_r:
+                        new_rot = st.text_input(
+                            "Rotacion", value=sel_item.get("rotacion", "0 0 0"),
+                            key=f"pr_{sel_item['targetIndex']}"
+                        )
+
+                    col_reload, col_save = st.columns([1, 2])
+                    with col_reload:
+                        if st.button("Recargar visor", use_container_width=True):
+                            del st.session_state[cache_key]
+                            st.rerun()
+                    with col_save:
+                        if st.button("Guardar", type="primary", use_container_width=True):
+                            sel_item["escala"] = new_scale.strip() or "0.7 0.7 0.7"
+                            sel_item["posicion"] = new_pos.strip() or "0 0 0"
+                            sel_item["rotacion"] = new_rot.strip() or "0 0 0"
+                            save_item(proyecto_activo["id"], sel_item)
+                            sync_json(proyecto_activo["id"], dirs_prev)
+                            del st.session_state[cache_key]
+                            st.success("Transformacion guardada.")
+                            st.rerun()
 
 
 # ═══════════════════════════════════════════════
