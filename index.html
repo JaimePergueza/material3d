@@ -19,7 +19,7 @@
       background: #000;
       overflow: hidden;
     }
-    
+
     a-scene {
       position: fixed;
       top: 0;
@@ -28,7 +28,7 @@
       height: 100%;
       z-index: 1;
     }
-    
+
     video, canvas {
       width: 100% !important;
       height: 100% !important;
@@ -36,6 +36,12 @@
       position: absolute !important;
       top: 0;
       left: 0;
+    }
+
+    /* Ocultar botón VR de A-Frame */
+    .a-enter-vr, .a-enter-ar,
+    #arButton, [id^="aframe"] .a-enter-vr {
+      display: none !important;
     }
 
     /* Controles simplificados - solo 2 botones */
@@ -47,7 +53,7 @@
       gap: 10px;
       z-index: 9999;
     }
-    
+
     .vc-btn {
       background: rgba(255,255,255,0.15);
       color: #fff;
@@ -61,11 +67,11 @@
       backdrop-filter: blur(10px);
       box-shadow: 0 4px 6px rgba(0,0,0,0.3);
     }
-    
+
     .vc-btn:active {
       transform: scale(0.95);
     }
-    
+
     .vc-btn[aria-pressed="true"] {
       background: rgba(66, 153, 225, 0.9);
       border-color: rgba(66, 153, 225, 1);
@@ -106,8 +112,7 @@
       0% { transform: rotate(0deg); }
       100% { transform: rotate(360deg); }
     }
-  </style>
-  <style>
+
     /* Overlay de escaneo */
     #scan-overlay {
       position: fixed;
@@ -141,17 +146,6 @@
       50% { top: calc(100% - 11px); }
       100% { top: 8px; }
     }
-    #scan-text {
-      position: absolute;
-      bottom: 10px; left: 0; right: 0;
-      text-align: center;
-      color: #e6f2ff;
-      font-family: Arial, sans-serif;
-      font-weight: 600;
-      text-shadow: 0 2px 6px rgba(0,0,0,0.6);
-      filter: drop-shadow(0 0 6px rgba(66,153,225,0.7));
-      pointer-events: none;
-    }
     #scan-overlay.hidden { display: none; }
   </style>
 </head>
@@ -167,38 +161,113 @@
   <div id="scan-overlay">
     <div id="scan-frame">
       <div id="scan-line"></div>
-      <!--<div id="scan-text">Coloca la imagen objetivo dentro del cuadro</div>-->
     </div>
   </div>
 
-  <!-- 
-    ============================================================
-    ESCENA AR CON MÚLTIPLES MARCADORES
-    ============================================================
-    Para que MindAR reconozca múltiples imágenes simultáneamente,
-    debes crear un ÚNICO archivo .mind que contenga TODAS tus
-    imágenes objetivo.
-    
-    Usa el compilador: https://hiukim.github.io/mind-ar-js-doc/tools/compile
-    - Sube TODAS tus imágenes (portada.jpg, proceso.jpg, etc.)
-    - Descarga el archivo resultante como "targets.mind"
-    - Colócalo en ./marcadores/targets.mind
+  <!--
+    Componente A-Frame: gestos táctiles para mover/escalar/rotar modelos 3D.
+    Se registra ANTES de que la escena se cree.
   -->
+  <script>
+    AFRAME.registerComponent('gesture-handler', {
+      schema: {
+        rotationFactor: { default: 5 },
+        moveFactor: { default: 0.0015 },
+        scaleFactor: { default: 0.6 }
+      },
+
+      init: function () {
+        this.initialScale = null;
+        this.currentScaleRatio = 1;
+        this.prevTouchPos = null;
+        this.pinchStartDist = 0;
+        this.pinchStartAngle = 0;
+
+        this.onTouchStart = this.onTouchStart.bind(this);
+        this.onTouchMove = this.onTouchMove.bind(this);
+        this.onTouchEnd = this.onTouchEnd.bind(this);
+
+        this.el.sceneEl.addEventListener('touchstart', this.onTouchStart, { passive: false });
+        this.el.sceneEl.addEventListener('touchmove', this.onTouchMove, { passive: false });
+        this.el.sceneEl.addEventListener('touchend', this.onTouchEnd);
+      },
+
+      onTouchStart: function (e) {
+        if (!this.el.object3D.visible) return;
+
+        if (!this.initialScale) {
+          this.initialScale = this.el.object3D.scale.clone();
+        }
+
+        if (e.touches.length === 1) {
+          this.prevTouchPos = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+        }
+        if (e.touches.length === 2) {
+          this.pinchStartDist = this._dist(e.touches[0], e.touches[1]);
+          this.pinchStartAngle = this._angle(e.touches[0], e.touches[1]);
+        }
+      },
+
+      onTouchMove: function (e) {
+        if (!this.el.object3D.visible) return;
+        e.preventDefault();
+
+        // 1 dedo: mover en X / Y
+        if (e.touches.length === 1 && this.prevTouchPos) {
+          var dx = e.touches[0].clientX - this.prevTouchPos.x;
+          var dy = e.touches[0].clientY - this.prevTouchPos.y;
+          this.el.object3D.position.x += dx * this.data.moveFactor;
+          this.el.object3D.position.y -= dy * this.data.moveFactor;
+          this.prevTouchPos = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+        }
+
+        // 2 dedos: pinch para escalar + rotar
+        if (e.touches.length === 2) {
+          var dist = this._dist(e.touches[0], e.touches[1]);
+          var ratio = dist / this.pinchStartDist;
+          var newScale = this.currentScaleRatio * ratio;
+          newScale = Math.max(0.05, Math.min(newScale, 10));
+          this.el.object3D.scale.set(
+            this.initialScale.x * newScale,
+            this.initialScale.y * newScale,
+            this.initialScale.z * newScale
+          );
+
+          var angle = this._angle(e.touches[0], e.touches[1]);
+          var dAngle = angle - this.pinchStartAngle;
+          this.el.object3D.rotation.y += dAngle * this.data.rotationFactor;
+          this.pinchStartAngle = angle;
+        }
+      },
+
+      onTouchEnd: function (e) {
+        this.prevTouchPos = null;
+        if (e.touches.length < 2 && this.initialScale) {
+          this.currentScaleRatio = this.el.object3D.scale.x / this.initialScale.x;
+          if (e.touches.length === 1) {
+            this.prevTouchPos = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+          }
+        }
+      },
+
+      _dist: function (a, b) {
+        return Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+      },
+
+      _angle: function (a, b) {
+        return Math.atan2(b.clientY - a.clientY, b.clientX - a.clientX);
+      }
+    });
+  </script>
+
   <a-scene
     id="scene"
-    mindar-image="imageTargetSrc: ./marcadores/targets.mind; autoStart: false; uiScanning: no; uiLoading: no;"
+    mindar-image="imageTargetSrc: ./marcadores/targets.mind; autoStart: false; uiScanning: no; uiLoading: no; filterMinCF: 0.0001; filterBeta: 10;"
     vr-mode-ui="enabled: false"
     device-orientation-permission-ui="enabled: false"
     renderer="antialias: true; colorManagement: true; physicallyCorrectLights: true; precision: medium; alpha: true;"
     embedded
   >
-    <!--
-      ============================================================
-      CONTENIDO AR DINAMICO
-      ============================================================
-      Este bloque se llena automaticamente desde ar_items.json.
-      Usa la app local de configuracion para agregar pares imagen <-> modelo.
-    -->
     <a-assets id="dynamic-assets"></a-assets>
     <a-entity id="dynamic-anchors"></a-entity>
 
@@ -210,22 +279,12 @@
     <a-camera position="0 0 0" look-controls="enabled: false"></a-camera>
   </a-scene>
 
-  <!-- 
-    ============================================================
-    CONTROLES DE VISTA - Solo 2 botones
-    ============================================================
-    Ambos modos muestran la cámara Y los modelos 3D.
-    La única diferencia es el color de fondo:
-    - Transparente: Fondo transparente detrás de la cámara
-    - Fondo Negro: Fondo negro detrás de la cámara
-  -->
   <div id="view-controls" role="toolbar" aria-label="Controles de vista">
-    <button id="mode-transparent" class="vc-btn" aria-pressed="false">📷 Cámara</button>
-    <button id="mode-black" class="vc-btn" aria-pressed="true">⬛ Fondo Negro</button>
+    <button id="mode-transparent" class="vc-btn" aria-pressed="false">Camara</button>
+    <button id="mode-black" class="vc-btn" aria-pressed="true">Fondo Negro</button>
   </div>
 
   <script>
-    // Datos por defecto (fallback para Vercel/offline)
     const AR_ITEMS_DEFAULT = [
       {
         targetIndex: 0,
@@ -252,24 +311,20 @@
     (function(){
       let arSystem = null;
       let sceneEl = null;
-      let currentMode = 'black'; // Modo inicial
+      let currentMode = 'black';
       let threeRenderer = null;
-      let trackingActive = false;
 
-      // Siempre cargar el ar_items.json global (raíz) que contiene
-      // TODOS los items de TODOS los proyectos, en sincronía con targets.mind
+      // Set de targets activos para controlar el scan overlay de forma fiable
+      const activeTargets = new Set();
+
       async function loadARItems() {
         const jsonUrl = `./ar_items.json?v=${Date.now()}`;
         try {
           const response = await fetch(jsonUrl);
-          if (!response.ok) {
-            throw new Error(`HTTP ${response.status}`);
-          }
+          if (!response.ok) throw new Error(`HTTP ${response.status}`);
 
           const data = await response.json();
-          if (!Array.isArray(data)) {
-            throw new Error('ar_items.json debe contener un arreglo.');
-          }
+          if (!Array.isArray(data)) throw new Error('ar_items.json debe contener un arreglo.');
 
           if (data.length > 0) {
             AR_ITEMS = data;
@@ -304,7 +359,6 @@
           const anchor = document.createElement('a-entity');
           anchor.setAttribute('id', `anchor-${item.targetIndex}`);
           anchor.setAttribute('mindar-image-target', `targetIndex: ${item.targetIndex}`);
-          anchor.setAttribute('data-image-ref', item.imagen || '');
 
           const model = document.createElement('a-gltf-model');
           model.setAttribute('id', `model-${item.targetIndex}`);
@@ -313,6 +367,7 @@
           model.setAttribute('scale', item.escala || '0.7 0.7 0.7');
           model.setAttribute('visible', 'false');
           model.setAttribute('animation-mixer', '');
+          model.setAttribute('gesture-handler', '');
           model.dataset.modelSrc = item.modelo;
           model.dataset.modelFallback = item.modeloFallback || '';
           model.dataset.modelRequested = 'false';
@@ -356,7 +411,16 @@
         console.log(`AR_ITEMS cargados: ${normalizedItems.length}`);
       }
 
-      // Inicializar AR
+      function updateScanOverlay() {
+        const scanOverlay = document.getElementById('scan-overlay');
+        if (!scanOverlay) return;
+        if (activeTargets.size > 0) {
+          scanOverlay.classList.add('hidden');
+        } else {
+          scanOverlay.classList.remove('hidden');
+        }
+      }
+
       async function initAR() {
         sceneEl = document.getElementById('scene');
 
@@ -371,7 +435,7 @@
 
         try {
           await waitSceneLoaded;
-          console.log('✅ Escena cargada');
+          console.log('Escena cargada');
 
           arSystem = sceneEl.systems['mindar-image-system'];
           if (!arSystem) {
@@ -384,26 +448,23 @@
               setTimeout(() => reject(new Error('Timeout iniciando MindAR.')), 15000);
             })
           ]);
-          console.log('✅ MindAR iniciado - Apunta a tus imágenes');
-            
-            // Obtener renderer de Three.js de A-Frame para controlar el clear color/alpha
+          console.log('MindAR iniciado');
+
             threeRenderer = sceneEl.renderer;
             if (threeRenderer) {
               try {
                 threeRenderer.setClearColor(0x000000, 1);
-              } catch(e) {
-                console.warn('No se pudo setear clearColor inicialmente', e);
-              }
+              } catch(e) {}
             }
 
-            // Suscribirse a eventos de tracking por target
             const anchors = Array.from(document.querySelectorAll('[mindar-image-target]'));
 
             anchors.forEach((anchor) => {
-              const targetLabel = anchor.getAttribute('id') || 'target';
+              const targetId = anchor.getAttribute('id') || 'target';
+
               anchor.addEventListener('targetFound', () => {
-                trackingActive = true;
-                console.log(`🎯 targetFound -> ${targetLabel}`);
+                activeTargets.add(targetId);
+                console.log(`targetFound -> ${targetId}`);
 
                 const modelEl = anchor.querySelector('a-gltf-model');
                 if (modelEl) {
@@ -411,50 +472,38 @@
                     modelEl.dataset.modelRequested = 'true';
                     modelEl.setAttribute('src', modelEl.dataset.modelSrc || '');
                   }
-
                   if (modelEl.dataset.modelReady === 'true') {
                     modelEl.setAttribute('visible', 'true');
                   }
                 }
 
-                const scanOverlay = document.getElementById('scan-overlay');
-                if (scanOverlay) scanOverlay.classList.add('hidden');
+                updateScanOverlay();
               });
+
               anchor.addEventListener('targetLost', () => {
-                // Si ninguno está activo, muestra overlay
-                console.log(`⭕ targetLost -> ${targetLabel}`);
+                activeTargets.delete(targetId);
+                console.log(`targetLost -> ${targetId}`);
 
                 const modelEl = anchor.querySelector('a-gltf-model');
                 if (modelEl) {
                   modelEl.setAttribute('visible', 'false');
                 }
 
-                setTimeout(() => {
-                  // Verificar si sigue sin tracking tras un breve lapso
-                  if (!document.querySelector('[mindar-image-target].found')) {
-                    trackingActive = false;
-                    const scanOverlay = document.getElementById('scan-overlay');
-                    if (scanOverlay) scanOverlay.classList.remove('hidden');
-                  }
-                }, 200);
+                updateScanOverlay();
               });
             });
-            
-            // Ocultar overlay de carga y mostrar guía de escaneo mientras no hay tracking
+
             document.getElementById('loading-overlay').classList.add('hidden');
-            const scanOverlay = document.getElementById('scan-overlay');
-            if (scanOverlay) scanOverlay.classList.remove('hidden');
-            
-            // Aplicar modo inicial
+            updateScanOverlay();
             setMode(currentMode);
+
         } catch (error) {
-          console.error('❌ Error al iniciar MindAR:', error);
+          console.error('Error al iniciar MindAR:', error);
           document.getElementById('loading-overlay').innerHTML =
-            '<div>❌ Error al iniciar AR</div><div style="font-size: 12px; margin-top: 10px;">Verifica camara, permisos y que exista ./marcadores/targets.mind</div>';
+            '<div>Error al iniciar AR</div><div style="font-size: 12px; margin-top: 10px;">Verifica camara, permisos y que exista ./marcadores/targets.mind</div>';
         }
       }
 
-      // Obtener elementos multimedia
       function getMediaElements() {
         return {
           videos: Array.from(document.querySelectorAll('video')),
@@ -462,12 +511,10 @@
         };
       }
 
-      // Cambiar modo de visualización
       function setMode(mode) {
         currentMode = mode;
         const { videos, canvases } = getMediaElements();
 
-        // Asegurar que ocupen toda la pantalla
         [...videos, ...canvases].forEach(el => {
           el.style.display = 'block';
           el.style.visibility = 'visible';
@@ -480,7 +527,6 @@
         });
 
         if (mode === 'transparent') {
-          // Fondo del body transparente y canvas con alpha 0
           document.body.style.background = 'transparent';
           if (threeRenderer && threeRenderer.setClearColor) {
             try { threeRenderer.setClearColor(0x000000, 0); } catch(e) {}
@@ -492,34 +538,25 @@
           }
         }
 
-        // Actualizar estado de botones
         document.querySelectorAll('.vc-btn').forEach(btn => {
           btn.setAttribute('aria-pressed', 'false');
         });
         const activeBtn = document.getElementById(`mode-${mode}`);
         if (activeBtn) activeBtn.setAttribute('aria-pressed', 'true');
-
-        console.log(`🔄 Modo cambiado a: ${mode}`);
       }
 
-      // Configurar eventos
       window.addEventListener('load', function() {
-        console.log('🚀 Inicializando aplicación AR...');
-
-        // Iniciar AR
         initAR();
 
-        // Botones de modo
         document.getElementById('mode-transparent').addEventListener('click', () => {
           setMode('transparent');
         });
-        
+
         document.getElementById('mode-black').addEventListener('click', () => {
           setMode('black');
         });
       });
 
-      // Cleanup
       window.addEventListener('beforeunload', () => {
         if (arSystem) {
           arSystem.stop();
